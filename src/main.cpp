@@ -146,8 +146,43 @@ static String inferManeuverFromText(const String &text) {
   return "straight";
 }
 
-void applyPayload(const String &payload) {
-  if (payload == g_lastPayload) return;
+void applyPayload(const String &rawPayload) {
+  String payload = rawPayload;
+  bool isTestPacket = (payload == "turn-right|200 m|Teststrasse" ||
+                       payload.endsWith("|Teststrasse"));
+
+  if (isTestPacket) {
+    static const char *const kManeuvers[] = {
+      "turn-right",   "turn-left",    "slight-right", "slight-left",
+      "sharp-right",  "sharp-left",   "uturn",        "roundabout",
+      "merge",        "straight",     "arrive"
+    };
+    static const char *const kLabels[] = {
+      "Turn Right",   "Turn Left",    "Slight Right", "Slight Left",
+      "Sharp Right",  "Sharp Left",   "U-Turn",       "Roundabout",
+      "Merge",        "Straight",     "Destination"
+    };
+    static uint8_t s_testIdx = 0;
+    const uint8_t idx = s_testIdx;
+    s_testIdx = (s_testIdx + 1) % 11;
+
+    // Randomize distance between 10 m and 5000 m (5.0 km):
+    // Half the time pick 10 m .. 990 m (in 10 m steps) so < 50 m and meter steps are easy to see,
+    // half the time pick 1.0 km .. 5.0 km (in 0.1 km / 100 m steps).
+    uint32_t r = esp_random();
+    String distStr;
+    if (r & 1) {
+      int meters = (int)((r >> 1) % 99) * 10 + 10; // 10 m .. 990 m
+      distStr = String(meters) + " m";
+    } else {
+      int tenthsKm = (int)((r >> 1) % 41) + 10;    // 10 .. 50 -> 1.0 km .. 5.0 km
+      distStr = String(tenthsKm / 10) + "." + String(tenthsKm % 10) + " km";
+    }
+
+    payload = String(kManeuvers[idx]) + "|" + distStr + "|" + String(kLabels[idx]);
+  } else {
+    if (payload == g_lastPayload) return;
+  }
   g_lastPayload = payload;
 
   int p1 = payload.indexOf('|');
@@ -163,7 +198,7 @@ void applyPayload(const String &payload) {
 
   // Workaround for unpatched Android companion app where English subText ("Arrive at HH:MM")
   // prematurely triggers m="arrive" on every notification.
-  if (m == "arrive") {
+  if (m == "arrive" && !isTestPacket && !s.startsWith("Test:")) {
     String inferred = inferManeuverFromText(s);
     if (inferred != "arrive") {
       if (inferred != "straight") {

@@ -104,11 +104,11 @@ Runtime hardware detection automatically identifies your board revision at boot 
 
 ## BLE GATT Protocol Summary
 
-- **Service UUID**: `6e400001-b5a3-f393-e0a9-e50e24dcca9e`
-  - **Navigation Characteristic (`6e400002-...`, Write/Write_NR)**: UTF-8 string `"maneuver|distance|street"` (e.g. `"turn-right|150 m|Main St"`, `"end||"`).
-  - **Icon Characteristic (`6e400003-...`, Write/Write_NR)**: `203` bytes (`'I'`, `40`, `40`, followed by `200` bytes of 1-bit row-major `40×40` bitmap data), or `3` bytes (`'I', 0, 0`) to clear.
-  - **Media Characteristic (`6e400004-...`, Write/Write_NR)**: UTF-8 string `"state|title|artist"` (`state` = `play`, `pause`, or `stop`).
-  - **Command Characteristic (`6e400005-...`, Notify)**: `1` byte sent from ESP32 to phone (`'P'` = Play/Pause, `'N'` = Next, `'V'` = Previous).
+- **Service UUID**: `12345678-1234-5678-1234-56789abcdef0`
+  - **Navigation Characteristic (`...def1`, Write/Write_NR)**: UTF-8 string `"maneuver|distance|street"` (e.g. `"turn-right|150 m|Main St"`, `"end||"`).
+  - **Icon Characteristic (`...def2`, Write/Write_NR)**: `203` bytes (`'I'`, `40`, `40`, followed by `200` bytes of 1-bit row-major `40×40` bitmap data), or `3` bytes (`'I', 0, 0`) to clear.
+  - **Media Characteristic (`...def3`, Write/Write_NR)**: UTF-8 string `"state|title|artist"` (`state` = `play`, `pause`, or `stop`).
+  - **Command Characteristic (`...def4`, Notify)**: `1` byte sent from ESP32 to phone (`'P'` = Play/Pause, `'N'` = Next, `'V'` = Previous).
 
 ---
 
