@@ -1,0 +1,84 @@
+/*
+ * ui_common.h — Shared UI constants, state, and text rendering helpers
+ *               used across all screen components.
+ */
+
+#pragma once
+
+#include <Arduino.h>
+#include "Arduino_GFX_Library.h"
+#include "canvas/Arduino_Canvas.h"
+#include "pin_config.h"
+#include "fonts/FreeSans9pt7b.h"
+#include "fonts/FreeSansBold12pt7b.h"
+#include "fonts/FreeSansBold24pt7b.h"
+
+#define FW_VERSION      "1.8.0-S3"
+
+// ===================== Display Dimensions =====================
+#define SCREEN_W        LCD_WIDTH     // 368
+#define SCREEN_H        LCD_HEIGHT    // 448
+#define CX              (SCREEN_W / 2) // 184
+#define CY              (SCREEN_H / 2) // 224
+
+// ===================== Colour Palette (RGB565) =====================
+#define COL_BG          0x0000        // Pure black (AMOLED pixels off)
+#define COL_ARROW       0x07E8        // Accent green
+#define COL_DIST        0xFFFF        // White
+#define COL_STREET      0xC618        // Light grey
+#define COL_DIM         0x4208        // Dark grey
+#define COL_RED         0xF800        // Red (disconnected / low battery)
+
+// ===================== Icon Bitmap Constants =====================
+#define ICON_W          40
+#define ICON_H          40
+#define OUT_ICON_W      200
+#define OUT_ICON_H      200
+
+// ===================== Screen Identifiers =====================
+enum ScreenId : uint8_t {
+  SCR_MAIN  = 0,  // Turn-by-turn navigation & waiting screen
+  SCR_MEDIA = 1,  // Music playback control screen
+  SCR_INFO  = 2,  // Battery, BLE, and hardware status screen
+  SCR_COUNT = 3
+};
+
+// ===================== Shared Application State =====================
+extern Arduino_GFX    *gfx;
+extern Arduino_Canvas *g_canvas;
+
+extern bool     g_connected;
+extern uint8_t  g_screen;
+
+// Navigation state
+extern String   g_maneuver;
+extern String   g_distance;
+extern String   g_street;
+extern bool     g_navEnded;
+extern bool     g_navShown;
+extern uint8_t  g_iconBits[ICON_W * ICON_H / 8];
+extern bool     g_iconValid;
+extern uint16_t *g_iconCanvas;
+
+// Media state
+extern uint8_t  g_mediaState;   // 0 = stopped, 1 = paused, 2 = playing
+extern String   g_mediaTitle;
+extern String   g_mediaArtist;
+
+// Battery state
+extern int      g_batLevel;     // -1 = unknown, 0..100 = percentage
+extern bool     g_batCharge;
+extern bool     g_hasBatteryIC;
+
+// Dirty flags for partial/full screen redraws
+extern bool     g_dirtyAll;
+extern bool     g_dirtyIcon;
+extern bool     g_dirtyDist;
+extern bool     g_dirtyStreet;
+extern bool     g_dirtyMedia;
+
+// ===================== Shared UI Helpers =====================
+void   flushDisplay();
+void   drawTextC(const String &s, int16_t centerY, const GFXfont *font, uint16_t color);
+String fitStreet(String s, const GFXfont *font, uint16_t maxW);
+void   sendMediaCommand(char cmd);
