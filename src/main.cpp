@@ -123,6 +123,11 @@ static int parseDistanceMeters(const String &d) {
 static String inferManeuverFromText(const String &text) {
   String t = text;
   t.toLowerCase();
+  // MUST check destination/arrival FIRST so "Destination will be on the right/left"
+  // is not misclassified as a right/left turn!
+  if (t.indexOf("destination") >= 0 || t.indexOf("you have arrived") >= 0 ||
+      t.indexOf("arrived") >= 0 || t.indexOf("ziel") >= 0 || t.indexOf("angekommen") >= 0)
+    return "arrive";
   if (t.indexOf("roundabout") >= 0 || t.indexOf("kreisverkehr") >= 0 || t.indexOf("exit") >= 0)
     return "roundabout";
   if (t.indexOf("u-turn") >= 0 || t.indexOf("uturn") >= 0 || t.indexOf("wenden") >= 0)
@@ -141,8 +146,6 @@ static String inferManeuverFromText(const String &text) {
     return "left";
   if (t.indexOf("merge") >= 0 || t.indexOf("einordnen") >= 0)
     return "merge";
-  if (t.indexOf("destination") >= 0 || t.indexOf("you have arrived") >= 0 || t.indexOf("ziel") >= 0)
-    return "arrive";
   return "straight";
 }
 
@@ -196,58 +199,74 @@ void applyPayload(const String &rawPayload) {
   }
   m.trim(); d.trim(); s.trim();
 
-  // Workaround for unpatched Android companion app where English subText ("Arrive at HH:MM")
-  // prematurely triggers m="arrive" on every notification.
-  if (m == "arrive" && !isTestPacket && !s.startsWith("Test:")) {
-    String inferred = inferManeuverFromText(s);
-    if (inferred != "arrive") {
-      if (inferred != "straight") {
-        m = inferred;
-      } else if (s == g_street && g_maneuver.length() > 0 &&
-                 g_maneuver != "arrive" && g_maneuver != "clear" && g_maneuver != "end") {
-        m = g_maneuver;
-      } else {
-        m = "straight";
-      }
-    }
-  }
-
-  // Handle immediate turn zone (< 50 m): measure approach speed from prior 10 m steps
-  // and count down 40 m -> 30 m -> 20 m -> 10 m smoothly (pausing when IMU detects stop).
   int curMeters = (d == "< 50 m") ? -1 : parseDistanceMeters(d);
-  bool enteredSub50 = false;
 
-  if (m != "clear" && m != "end") {
-    if (d == "< 50 m" || d.length() == 0) {
-      enteredSub50 = true;
-    } else if (s.length() > 0 && s == g_street &&
-               g_prevDistMeters > 0 && g_prevDistMeters <= 120 &&
-               curMeters > g_prevDistMeters + 300) {
-      enteredSub50 = true;
+  // If the street/notification text mentions destination/arrival (e.g. "Destination will be on the right"),
+  // always set m = "arrive".
+  String inferredFromStreet = inferManeuverFromText(s);
+  if (inferredFromStreet == "arrive") {
+    m = "arrive";
+  }
+
+  // Workaround for unpatched Android companion app where English subText ("Arrive at HH:MM")
+  // prematurely triggers m="arrive" while still far away (> 120 m).
+  if (m == "arrive" && !isTestPacket && !s.startsWith("Test:") &&
+      inferredFromStreet != "arrive" && curMeters > 120) {
+    if (inferredFromStreet != "straight") {
+      m = inferredFromStreet;
+    } else if (s == g_street && g_maneuver.length() > 0 &&
+               g_maneuver != "arrive" && g_maneuver != "clear" && g_maneuver != "end") {
+      m = g_maneuver;
+    } else {
+      m = "straight";
     }
   }
 
-  if (enteredSub50) {
-    g_sub50Active = true;
-    g_sub50Meters = 40;
-    g_sub50StepAt = millis();
-    d = "40 m";
-    curMeters = 40;
-  } else if (curMeters > 0) {
-    g_sub50Active = false;
-    uint32_t now = millis();
-    if (s == g_street && g_prevDistMeters > curMeters && g_prevDistTimeMs > 0) {
-      int deltaM = g_prevDistMeters - curMeters;
-      uint32_t dt = now - g_prevDistTimeMs;
-      if (deltaM > 0 && deltaM <= 60 && dt >= 150 && dt <= 12000) {
-        uint32_t stepMs = (dt * 10UL) / (uint32_t)deltaM;
-        if (stepMs < 300)  stepMs = 300;  // Max ~120 km/h
-        if (stepMs > 2500) stepMs = 2500; // Min ~14 km/h
-        g_msPer10m = (g_msPer10m * 3 + stepMs * 5) / 8;
+  // Handle destination arrival vs immediate turn zone (< 50 m)
+  if (m == "arrive" && (d.length() == 0 || d == "0 m" || (curMeters >= 0 && curMeters <= 10))) {
+    g_sub50Active    = false;
+    g_prevDistMeters = -1;
+    d = "Arrived";
+    if (s.length() == 0) s = "Destination";
+  } else {
+    bool enteredSub50 = false;
+    if (m != "clear" && m != "end") {
+      if (d == "< 50 m" || d.length() == 0) {
+        enteredSub50 = true;
+      } else if (s.length() > 0 && s == g_street &&
+                 g_prevDistMeters > 0 && g_prevDistMeters <= 120 &&
+                 curMeters > g_prevDistMeters + 300) {
+        enteredSub50 = true;
       }
     }
-    g_prevDistMeters = curMeters;
-    g_prevDistTimeMs = now;
+
+    if (enteredSub50) {
+      // Start at 40 m when first entering the < 50 m zone; if already counting down,
+      // keep the current g_sub50Meters step (even if maneuver upgraded to "arrive"!)
+      if (!g_sub50Active) {
+        g_sub50Active = true;
+        g_sub50Meters = 40;
+        g_sub50StepAt = millis();
+      }
+      d = (g_sub50Meters <= 0 && m == "arrive") ? String("Arrived")
+                                                : (String(g_sub50Meters) + " m");
+      curMeters = g_sub50Meters;
+    } else if (curMeters > 0) {
+      g_sub50Active = false;
+      uint32_t now = millis();
+      if (s == g_street && g_prevDistMeters > curMeters && g_prevDistTimeMs > 0) {
+        int deltaM = g_prevDistMeters - curMeters;
+        uint32_t dt = now - g_prevDistTimeMs;
+        if (deltaM > 0 && deltaM <= 60 && dt >= 150 && dt <= 12000) {
+          uint32_t stepMs = (dt * 10UL) / (uint32_t)deltaM;
+          if (stepMs < 300)  stepMs = 300;  // Max ~120 km/h
+          if (stepMs > 2500) stepMs = 2500; // Min ~14 km/h
+          g_msPer10m = (g_msPer10m * 3 + stepMs * 5) / 8;
+        }
+      }
+      g_prevDistMeters = curMeters;
+      g_prevDistTimeMs = now;
+    }
   }
 
   bool wasNav = g_maneuver.length() > 0 &&
@@ -476,8 +495,14 @@ static void goToSleep() {
 // ===================== QMI8658 6-Axis IMU (Motion / Stop Detector) =====================
 static uint8_t  g_imuAddr        = 0x6B;
 static bool     g_imuSeeded      = false;
-static float    g_baseAx         = 0.0f, g_baseAy = 0.0f, g_baseAz = 1.0f;
-static float    g_baseGx         = 0.0f, g_baseGy = 0.0f, g_baseGz = 0.0f;
+// Fast LPF (~0.8 Hz) vs Slow LPF (~0.15 Hz) on signed axes:
+// High-frequency symmetric motor/engine idling vibration (15-100 Hz) cancels to ~0
+// inside the signed fast LPF BEFORE magnitude is computed, while real vehicle
+// acceleration, braking, road waves (0.3-2 Hz), and steering pass through cleanly.
+static float    g_fastAx = 0.0f, g_fastAy = 0.0f, g_fastAz = 1.0f;
+static float    g_slowAx = 0.0f, g_slowAy = 0.0f, g_slowAz = 1.0f;
+static float    g_fastGx = 0.0f, g_fastGy = 0.0f, g_fastGz = 0.0f;
+static float    g_slowGx = 0.0f, g_slowGy = 0.0f, g_slowGz = 0.0f;
 static float    g_imuEnergy      = 0.0f;
 static uint32_t g_imuLastMoveMs  = 0;
 
@@ -512,15 +537,16 @@ static void imuInit() {
   }
 
   // Configure QMI8658:
-  // - CTRL1 (0x02) = 0x40: Address auto-increment + Little-Endian (bit 5 MUST be 0!)
+  // - CTRL1 (0x02) = 0x40: Address auto-increment + Little-Endian (bit 5 MUST be 0)
   // - CTRL2 (0x03) = 0x15: Accel +-4g, 125Hz ODR
   // - CTRL3 (0x04) = 0x55: Gyro +-512dps, 125Hz ODR
-  // - CTRL5 (0x06) = 0x55: Enable hardware low-pass filters for Accel & Gyro
+  // - CTRL5 (0x06) = 0x77: Enable deepest hardware LPF (MODE_3 = 2.66% ODR) for Accel & Gyro
+  //                        to reject high-frequency engine/motor vibration at the sensor ADC
   // - CTRL7 (0x08) = 0x03: Enable Accel + Gyro
   imuWriteReg(0x02, 0x40);
   imuWriteReg(0x03, 0x15);
   imuWriteReg(0x04, 0x55);
-  imuWriteReg(0x06, 0x55);
+  imuWriteReg(0x06, 0x77);
   imuWriteReg(0x08, 0x03);
   g_imuSeeded     = false;
   g_imuEnergy     = 0.0f;
@@ -557,37 +583,53 @@ static void imuPoll() {
   float gy = rgy * (512.0f / 32768.0f);
   float gz = rgz * (512.0f / 32768.0f);
 
-  // Seed baseline on first valid sample so any resting orientation starts at 0 energy
+  // Seed both fast and slow filters on first valid sample
   if (!g_imuSeeded) {
-    g_baseAx = ax; g_baseAy = ay; g_baseAz = az;
-    g_baseGx = gx; g_baseGy = gy; g_baseGz = gz;
+    g_fastAx = g_slowAx = ax;
+    g_fastAy = g_slowAy = ay;
+    g_fastAz = g_slowAz = az;
+    g_fastGx = g_slowGx = gx;
+    g_fastGy = g_slowGy = gy;
+    g_fastGz = g_slowGz = gz;
     g_imuSeeded = true;
     return;
   }
 
-  // High-pass deviation from slow-adapting gravity & gyro zero-rate bias baseline
-  float dax = ax - g_baseAx, day = ay - g_baseAy, daz = az - g_baseAz;
-  float dgx = gx - g_baseGx, dgy = gy - g_baseGy, dgz = gz - g_baseGz;
+  // Update signed fast LPF (alpha=0.14 -> ~1 Hz) and slow baseline LPF (alpha=0.02 -> ~0.13 Hz).
+  // Symmetric motor/engine idle vibration (15-100 Hz) averages out to ~0 in g_fastA/G!
+  g_fastAx += (ax - g_fastAx) * 0.14f;
+  g_fastAy += (ay - g_fastAy) * 0.14f;
+  g_fastAz += (az - g_fastAz) * 0.14f;
+  g_slowAx += (ax - g_slowAx) * 0.02f;
+  g_slowAy += (ay - g_slowAy) * 0.02f;
+  g_slowAz += (az - g_slowAz) * 0.02f;
 
-  // Slowly adapt baseline to cancel static tilt and MEMS gyro DC temperature drift
-  g_baseAx += dax * 0.08f; g_baseAy += day * 0.08f; g_baseAz += daz * 0.08f;
-  g_baseGx += dgx * 0.05f; g_baseGy += dgy * 0.05f; g_baseGz += dgz * 0.05f;
+  g_fastGx += (gx - g_fastGx) * 0.14f;
+  g_fastGy += (gy - g_fastGy) * 0.14f;
+  g_fastGz += (gz - g_fastGz) * 0.14f;
+  g_slowGx += (gx - g_slowGx) * 0.02f;
+  g_slowGy += (gy - g_slowGy) * 0.02f;
+  g_slowGz += (gz - g_slowGz) * 0.02f;
 
-  float accelDev = sqrtf(dax * dax + day * day + daz * daz); // in g
-  float gyroDev  = sqrtf(dgx * dgx + dgy * dgy + dgz * dgz); // in deg/s
+  // Band-pass sustained vehicle motion (0.15 Hz .. 1.5 Hz)
+  float dax = g_fastAx - g_slowAx, day = g_fastAy - g_slowAy, daz = g_fastAz - g_slowAz;
+  float dgx = g_fastGx - g_slowGx, dgy = g_fastGy - g_slowGy, dgz = g_fastGz - g_slowGz;
 
-  // Ignore table/sensor thermal noise floor (< 0.025g and < 3.0 deg/s)
-  float netAccel = (accelDev > 0.025f) ? (accelDev - 0.025f) : 0.0f;
-  float netGyro  = (gyroDev  > 3.0f)   ? (gyroDev  - 3.0f)   : 0.0f;
+  float accelDev = sqrtf(dax * dax + day * day + daz * daz); // sustained linear accel in g
+  float gyroDev  = sqrtf(dgx * dgx + dgy * dgy + dgz * dgz); // sustained rotation in deg/s
 
-  float instEnergy = netAccel * 20.0f + netGyro * 0.25f;
-  g_imuEnergy = g_imuEnergy * 0.75f + instEnergy * 0.25f;
+  // Deadzone rejects motor/engine idle vibration & small bumps (< 0.055g and < 6.5 deg/s)
+  float netAccel = (accelDev > 0.055f) ? (accelDev - 0.055f) : 0.0f;
+  float netGyro  = (gyroDev  > 6.5f)   ? (gyroDev  - 6.5f)   : 0.0f;
 
-  if (g_imuEnergy > 0.30f) {
+  float instEnergy = netAccel * 14.0f + netGyro * 0.18f;
+  g_imuEnergy = g_imuEnergy * 0.82f + instEnergy * 0.18f;
+
+  if (g_imuEnergy > 0.45f) {
     g_imuLastMoveMs = now;
   }
 
-  // Vehicle/board is considered moving if motion occurred within the last 1.5 seconds
+  // Vehicle/board is considered moving if sustained motion occurred within the last 1.5 seconds
   bool movingNow = (g_imuLastMoveMs > 0) && ((now - g_imuLastMoveMs) < 1500);
   if (movingNow != g_imuMoving) {
     g_imuMoving = movingNow;
@@ -798,19 +840,37 @@ void loop() {
     if (batteryPoll() && g_screen == SCR_INFO) g_dirtyAll = true;
   }
 
-  // Step down 40 m -> 30 m -> 20 m -> 10 m inside the < 50 m turn zone.
-  // If the 6-axis IMU detects the vehicle/bike is stationary (e.g. stopped 20m before the turn),
-  // pause the countdown timer until movement resumes!
-  if (g_sub50Active && g_sub50Meters > 10) {
-    if (g_hasImu && !g_imuMoving) {
-      g_sub50StepAt = millis(); // Hold current meter distance while stopped
+  // Track whether the board has physically moved during this navigation route
+  // so stationary desk/Lockito testing counts down smoothly instead of freezing at 40 m.
+  static bool s_imuMovedDuringNav = false;
+  if (!g_navShown) {
+    s_imuMovedDuringNav = false;
+  } else if (g_hasImu && g_imuMoving) {
+    s_imuMovedDuringNav = true;
+  }
+
+  // Step down 40 m -> 30 m -> 20 m -> 10 m inside the < 50 m turn zone
+  // (and -> "Arrived" when approaching destination).
+  if (g_sub50Active && g_sub50Meters > 0) {
+    if (g_hasImu && s_imuMovedDuringNav && !g_imuMoving) {
+      g_sub50StepAt = millis(); // Hold current meter distance while stopped in traffic
     } else if (millis() - g_sub50StepAt >= g_msPer10m) {
       g_sub50StepAt = millis();
-      g_sub50Meters -= 10;
-      g_distance = String(g_sub50Meters) + " m";
-      g_dirtyDist = true;
-      Serial.printf("[NAV] sub-50m step -> d='%s' (pace=%lu ms/10m)\n",
-                    g_distance.c_str(), (unsigned long)g_msPer10m);
+      if (g_sub50Meters > 10) {
+        g_sub50Meters -= 10;
+        g_distance = String(g_sub50Meters) + " m";
+        g_dirtyDist = true;
+        Serial.printf("[NAV] sub-50m step -> d='%s' (pace=%lu ms/10m)\n",
+                      g_distance.c_str(), (unsigned long)g_msPer10m);
+      } else if (g_maneuver == "arrive") {
+        g_sub50Meters = 0;
+        g_sub50Active = false;
+        g_distance = "Arrived";
+        g_dirtyDist = true;
+        Serial.println("[NAV] destination reached -> d='Arrived'");
+      } else {
+        g_sub50Active = false; // Hold at 10 m for regular turns until turn completes
+      }
     }
   }
 

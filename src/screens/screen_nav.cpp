@@ -178,9 +178,14 @@ static void drawArrowHead(int16_t tipX, int16_t tipY, float angleDeg,
 }
 
 static void drawArrive(int16_t cx0, int16_t cy0, uint16_t color) {
-  gfx->fillCircle(cx0, cy0, 56, color);
-  gfx->fillCircle(cx0, cy0, 32, COL_BG);
-  gfx->fillCircle(cx0, cy0, 14, color);
+  // Ground target ring beneath pin tip
+  gfx->fillCircle(cx0, cy0 + 68, 26, 0x1B45);
+  gfx->fillCircle(cx0, cy0 + 68, 13, COL_BG);
+  // Map pin head + tapered teardrop point
+  gfx->fillCircle(cx0, cy0 - 20, 46, color);
+  gfx->fillTriangle(cx0 - 42, cy0 - 2, cx0 + 42, cy0 - 2, cx0, cy0 + 66, color);
+  // Inner pin cutout
+  gfx->fillCircle(cx0, cy0 - 20, 18, COL_BG);
 }
 
 static void drawRoundabout(int16_t cx0, int16_t cy0, uint16_t color) {
@@ -262,7 +267,8 @@ static void drawDistRegion() {
   if (g_distance.length()) {
     bool isClose = (g_distance == "40 m" || g_distance == "30 m" ||
                     g_distance == "20 m" || g_distance == "10 m" ||
-                    g_distance == "NOW");
+                    g_distance == "0 m"  || g_distance == "NOW"  ||
+                    g_distance == "Arrived" || g_maneuver == "arrive");
     uint16_t col = isClose ? COL_ARROW : COL_DIST;
     drawTextC(g_distance, DIST_CY, &FreeSansBold24pt7b, col);
   }
