@@ -28,11 +28,11 @@
 
 // ===================== BLE UUIDs =====================
 #define DEVICE_NAME      "Drive Assistant"
-#define SERVICE_UUID     "12345678-1234-5678-1234-56789abcdef0"
-#define NAV_CHAR_UUID    "12345678-1234-5678-1234-56789abcdef1"
-#define ICON_CHAR_UUID   "12345678-1234-5678-1234-56789abcdef2"
-#define MEDIA_CHAR_UUID  "12345678-1234-5678-1234-56789abcdef3"
-#define CMD_CHAR_UUID    "12345678-1234-5678-1234-56789abcdef4"
+#define SERVICE_UUID     "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
+#define NAV_CHAR_UUID    "6e400002-b5a3-f393-e0a9-e50e24dcca9e"
+#define ICON_CHAR_UUID   "6e400003-b5a3-f393-e0a9-e50e24dcca9e"
+#define MEDIA_CHAR_UUID  "6e400004-b5a3-f393-e0a9-e50e24dcca9e"
+#define CMD_CHAR_UUID    "6e400005-b5a3-f393-e0a9-e50e24dcca9e"
 
 // ===================== Touch & Power Constants =====================
 #define XCA9554_ADDR     0x20
@@ -653,7 +653,12 @@ void setup() {
   g_cmdChar = service->createCharacteristic(
       CMD_CHAR_UUID, NIMBLE_PROPERTY::NOTIFY);
 
+  server->start();
+
   NimBLEAdvertising *adv = NimBLEDevice::getAdvertising();
+  adv->stop();
+  adv->setMinInterval(0x20); // 20 ms fast advertising for instant Android discovery
+  adv->setMaxInterval(0x40); // 40 ms
   adv->enableScanResponse(true);
   NimBLEAdvertisementData advData;
   advData.setFlags(BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP);
@@ -662,7 +667,7 @@ void setup() {
   scanData.setName(DEVICE_NAME);
   adv->setAdvertisementData(advData);
   adv->setScanResponseData(scanData);
-  NimBLEDevice::startAdvertising();
+  adv->start();
 
   Serial.println("[BLE] Advertising as 'Drive Assistant'");
   g_lastActivity = millis();
