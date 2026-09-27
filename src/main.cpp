@@ -4,12 +4,12 @@
   Hardware Support (auto-detected at runtime via I2C @ 0x15):
   - V1 Board: SH8601 AMOLED (368x448 QSPI) + FT3168 Touch (@0x38) + XCA9554 (@0x20)
   - V2 Board: CO5300 AMOLED (368x448 QSPI, col_offset1=16) + CST816 Touch (@0x15)
-  - Both Boards: AXP2101 PMU (@0x34) for power rails, battery gauge, and PWR key
+  - Both Boards: AXP2101 PMU (@0x34) + QMI8658 6-Axis IMU (@0x6B)
 
   Screen Components (in src/screens/):
   - Screen 0 (SCR_MAIN):  Navigation & Waiting Screen (screen_nav.cpp)
   - Screen 1 (SCR_MEDIA): Music Playback Control Screen (screen_media.cpp)
-  - Screen 2 (SCR_INFO):  Device & Battery Status Screen (screen_info.cpp)
+  - Screen 2 (SCR_INFO):  Device, IMU & Battery Status Screen (screen_info.cpp)
 */
 
 #include <Arduino.h>
@@ -38,7 +38,7 @@
 #define XCA9554_ADDR     0x20
 #define SWIPE_MIN_PX     40
 #define LONGPRESS_MS     600
-#define SLEEP_TIMEOUT_MS (10UL * 60UL * 1000UL)   // 10 min without BLE/touch -> power off
+#define SLEEP_TIMEOUT_MS (10UL * 60UL * 1000UL)   // 10 min without BLE/motion/touch -> power off
 #define NAV_END_SHOW_MS  3500UL                   // Show "Navigation ended" for 3.5 s
 
 enum TouchEvent : uint8_t {
@@ -57,16 +57,21 @@ XPowersPMU power;
 static Arduino_DataBus *bus = new Arduino_ESP32QSPI(
     LCD_CS, LCD_SCLK, LCD_SDIO0, LCD_SDIO1, LCD_SDIO2, LCD_SDIO3);
 
-static Arduino_OLED       *g_panel        = nullptr;
-static TouchDrvInterface  *g_touch        = nullptr;
-static NimBLECharacteristic *g_cmdChar    = nullptr;
-static bool                g_pmuOk        = false;
-static bool                g_backlight    = true;
-static uint32_t            g_lastActivity = 0;
-static uint32_t            g_navEndedAt   = 0;
-static String              g_lastPayload  = "";
-static int                 g_prevDistMeters = -1;
-static int16_t             g_tapX = 0, g_tapY = 0;
+static Arduino_OLED         *g_panel          = nullptr;
+static TouchDrvInterface    *g_touch          = nullptr;
+static NimBLECharacteristic *g_cmdChar        = nullptr;
+static bool                  g_pmuOk          = false;
+static bool                  g_backlight      = true;
+static uint32_t              g_lastActivity   = 0;
+static uint32_t              g_navEndedAt     = 0;
+static String                g_lastPayload    = "";
+static int                   g_prevDistMeters = -1;
+static uint32_t              g_prevDistTimeMs = 0;
+static uint32_t              g_msPer10m       = 1000; // Pace per 10 m (default 1.0 s = 36 km/h)
+static bool                  g_sub50Active    = false;
+static int                   g_sub50Meters    = 40;
+static uint32_t              g_sub50StepAt    = 0;
+static int16_t               g_tapX = 0, g_tapY = 0;
 
 // ===================== Screen Dispatcher =====================
 void redraw() {
@@ -172,26 +177,53 @@ void applyPayload(const String &payload) {
     }
   }
 
-  // Handle immediate turn zone (< 50 m) when Google Maps drops the step distance from the title
-  int curMeters = parseDistanceMeters(d);
-  if (s.length() > 0 && s == g_street && g_prevDistMeters > 0 && g_prevDistMeters <= 120) {
-    if (d.length() == 0 || (curMeters > g_prevDistMeters + 300)) {
-      d = "< 50 m";
-      curMeters = 25;
+  // Handle immediate turn zone (< 50 m): measure approach speed from prior 10 m steps
+  // and count down 40 m -> 30 m -> 20 m -> 10 m smoothly (pausing when IMU detects stop).
+  int curMeters = (d == "< 50 m") ? -1 : parseDistanceMeters(d);
+  bool enteredSub50 = false;
+
+  if (m != "clear" && m != "end") {
+    if (d == "< 50 m" || d.length() == 0) {
+      enteredSub50 = true;
+    } else if (s.length() > 0 && s == g_street &&
+               g_prevDistMeters > 0 && g_prevDistMeters <= 120 &&
+               curMeters > g_prevDistMeters + 300) {
+      enteredSub50 = true;
     }
-  } else if (d.length() == 0 && m != "clear" && m != "end") {
-    d = "NOW";
   }
-  if (curMeters > 0) g_prevDistMeters = curMeters;
+
+  if (enteredSub50) {
+    g_sub50Active = true;
+    g_sub50Meters = 40;
+    g_sub50StepAt = millis();
+    d = "40 m";
+    curMeters = 40;
+  } else if (curMeters > 0) {
+    g_sub50Active = false;
+    uint32_t now = millis();
+    if (s == g_street && g_prevDistMeters > curMeters && g_prevDistTimeMs > 0) {
+      int deltaM = g_prevDistMeters - curMeters;
+      uint32_t dt = now - g_prevDistTimeMs;
+      if (deltaM > 0 && deltaM <= 60 && dt >= 150 && dt <= 12000) {
+        uint32_t stepMs = (dt * 10UL) / (uint32_t)deltaM;
+        if (stepMs < 300)  stepMs = 300;  // Max ~120 km/h
+        if (stepMs > 2500) stepMs = 2500; // Min ~14 km/h
+        g_msPer10m = (g_msPer10m * 3 + stepMs * 5) / 8;
+      }
+    }
+    g_prevDistMeters = curMeters;
+    g_prevDistTimeMs = now;
+  }
 
   bool wasNav = g_maneuver.length() > 0 &&
                 g_maneuver != "clear" && g_maneuver != "end";
   bool isNav  = m.length() > 0 && m != "clear" && m != "end";
 
   if (m == "end" && wasNav) {
-    g_navEnded   = true;
-    g_navEndedAt = millis();
+    g_navEnded       = true;
+    g_navEndedAt     = millis();
     g_prevDistMeters = -1;
+    g_sub50Active    = false;
   }
   if (isNav) g_navEnded = false;
 
@@ -202,8 +234,9 @@ void applyPayload(const String &payload) {
 
   if (wasNav != isNav) g_dirtyAll = true;
   if (!isNav) {
-    g_iconValid = false;
+    g_iconValid      = false;
     g_prevDistMeters = -1;
+    g_sub50Active    = false;
   }
 
   Serial.printf("[NAV] raw='%s' -> m='%s' d='%s' s='%s'\n",
@@ -224,6 +257,7 @@ class ServerCallbacks : public NimBLEServerCallbacks {
     g_maneuver       = "";
     g_iconValid      = false;
     g_prevDistMeters = -1;
+    g_sub50Active    = false;
     Serial.println("[BLE] client disconnected -> restarting advertising");
     NimBLEDevice::startAdvertising();
   }
@@ -404,6 +438,130 @@ static void goToSleep() {
   esp_deep_sleep_start();
 }
 
+// ===================== QMI8658 6-Axis IMU (Motion / Stop Detector) =====================
+static uint8_t  g_imuAddr        = 0x6B;
+static bool     g_imuSeeded      = false;
+static float    g_baseAx         = 0.0f, g_baseAy = 0.0f, g_baseAz = 1.0f;
+static float    g_baseGx         = 0.0f, g_baseGy = 0.0f, g_baseGz = 0.0f;
+static float    g_imuEnergy      = 0.0f;
+static uint32_t g_imuLastMoveMs  = 0;
+
+static void imuWriteReg(uint8_t reg, uint8_t val) {
+  Wire.beginTransmission(g_imuAddr);
+  Wire.write(reg);
+  Wire.write(val);
+  Wire.endTransmission();
+}
+
+static bool imuReadRegs(uint8_t reg, uint8_t *buf, size_t len) {
+  Wire.beginTransmission(g_imuAddr);
+  Wire.write(reg);
+  if (Wire.endTransmission(false) != 0) return false;
+  if (Wire.requestFrom((int)g_imuAddr, (int)len) != (int)len) return false;
+  for (size_t i = 0; i < len; i++) buf[i] = Wire.read();
+  return true;
+}
+
+static void imuInit() {
+  uint8_t who = 0;
+  for (uint8_t addr : { (uint8_t)0x6B, (uint8_t)0x6A }) {
+    g_imuAddr = addr;
+    if (imuReadRegs(0x00, &who, 1) && who == 0x05) {
+      g_hasImu = true;
+      break;
+    }
+  }
+  if (!g_hasImu) {
+    Serial.println("[IMU] QMI8658 not found on I2C");
+    return;
+  }
+
+  // Configure QMI8658:
+  // - CTRL1 (0x02) = 0x40: Address auto-increment + Little-Endian (bit 5 MUST be 0!)
+  // - CTRL2 (0x03) = 0x15: Accel +-4g, 125Hz ODR
+  // - CTRL3 (0x04) = 0x55: Gyro +-512dps, 125Hz ODR
+  // - CTRL5 (0x06) = 0x55: Enable hardware low-pass filters for Accel & Gyro
+  // - CTRL7 (0x08) = 0x03: Enable Accel + Gyro
+  imuWriteReg(0x02, 0x40);
+  imuWriteReg(0x03, 0x15);
+  imuWriteReg(0x04, 0x55);
+  imuWriteReg(0x06, 0x55);
+  imuWriteReg(0x08, 0x03);
+  g_imuSeeded     = false;
+  g_imuEnergy     = 0.0f;
+  g_imuLastMoveMs = 0;
+  g_imuMoving     = false;
+  Serial.printf("[IMU] QMI8658 6-axis IMU active (@0x%02X)\n", g_imuAddr);
+}
+
+static void imuPoll() {
+  if (!g_hasImu) return;
+  static uint32_t s_lastImuMs = 0;
+  uint32_t now = millis();
+  if (now - s_lastImuMs < 25) return; // 40 Hz polling
+  s_lastImuMs = now;
+
+  uint8_t status0 = 0;
+  if (!imuReadRegs(0x2E, &status0, 1) || (status0 & 0x03) == 0) return;
+
+  uint8_t raw[12];
+  if (!imuReadRegs(0x35, raw, 12)) return;
+
+  int16_t rax = (int16_t)((uint16_t)raw[0] | ((uint16_t)raw[1] << 8));
+  int16_t ray = (int16_t)((uint16_t)raw[2] | ((uint16_t)raw[3] << 8));
+  int16_t raz = (int16_t)((uint16_t)raw[4] | ((uint16_t)raw[5] << 8));
+  int16_t rgx = (int16_t)((uint16_t)raw[6] | ((uint16_t)raw[7] << 8));
+  int16_t rgy = (int16_t)((uint16_t)raw[8] | ((uint16_t)raw[9] << 8));
+  int16_t rgz = (int16_t)((uint16_t)raw[10] | ((uint16_t)raw[11] << 8));
+
+  // Convert to g (+-4g scale -> 8192 LSB/g) and deg/s (+-512dps scale -> 64 LSB/dps)
+  float ax = rax * (4.0f / 32768.0f);
+  float ay = ray * (4.0f / 32768.0f);
+  float az = raz * (4.0f / 32768.0f);
+  float gx = rgx * (512.0f / 32768.0f);
+  float gy = rgy * (512.0f / 32768.0f);
+  float gz = rgz * (512.0f / 32768.0f);
+
+  // Seed baseline on first valid sample so any resting orientation starts at 0 energy
+  if (!g_imuSeeded) {
+    g_baseAx = ax; g_baseAy = ay; g_baseAz = az;
+    g_baseGx = gx; g_baseGy = gy; g_baseGz = gz;
+    g_imuSeeded = true;
+    return;
+  }
+
+  // High-pass deviation from slow-adapting gravity & gyro zero-rate bias baseline
+  float dax = ax - g_baseAx, day = ay - g_baseAy, daz = az - g_baseAz;
+  float dgx = gx - g_baseGx, dgy = gy - g_baseGy, dgz = gz - g_baseGz;
+
+  // Slowly adapt baseline to cancel static tilt and MEMS gyro DC temperature drift
+  g_baseAx += dax * 0.08f; g_baseAy += day * 0.08f; g_baseAz += daz * 0.08f;
+  g_baseGx += dgx * 0.05f; g_baseGy += dgy * 0.05f; g_baseGz += dgz * 0.05f;
+
+  float accelDev = sqrtf(dax * dax + day * day + daz * daz); // in g
+  float gyroDev  = sqrtf(dgx * dgx + dgy * dgy + dgz * dgz); // in deg/s
+
+  // Ignore table/sensor thermal noise floor (< 0.025g and < 3.0 deg/s)
+  float netAccel = (accelDev > 0.025f) ? (accelDev - 0.025f) : 0.0f;
+  float netGyro  = (gyroDev  > 3.0f)   ? (gyroDev  - 3.0f)   : 0.0f;
+
+  float instEnergy = netAccel * 20.0f + netGyro * 0.25f;
+  g_imuEnergy = g_imuEnergy * 0.75f + instEnergy * 0.25f;
+
+  if (g_imuEnergy > 0.30f) {
+    g_imuLastMoveMs = now;
+  }
+
+  // Vehicle/board is considered moving if motion occurred within the last 1.5 seconds
+  bool movingNow = (g_imuLastMoveMs > 0) && ((now - g_imuLastMoveMs) < 1500);
+  if (movingNow != g_imuMoving) {
+    g_imuMoving = movingNow;
+    if (g_screen == SCR_INFO) g_dirtyAll = true;
+    Serial.printf("[IMU] state -> %s (accelDev=%.3fg gyroDev=%.1fdps)\n",
+                  g_imuMoving ? "MOVING" : "STATIONARY", accelDev, gyroDev);
+  }
+}
+
 // ===================== Arduino Setup & Main Loop =====================
 void setup() {
   Serial.begin(115200);
@@ -464,11 +622,12 @@ void setup() {
   redraw();
   setBacklight(true);
 
-  // 4. Initialize Touch & Battery
+  // 4. Initialize Touch, 6-Axis IMU & Battery
   g_touch = make_touch();
   if (g_touch) {
     Serial.println("[TOUCH] Touch driver ready");
   }
+  imuInit();
   batteryPoll();
 
   // 5. Initialize NimBLE GATT Server
@@ -520,6 +679,9 @@ void loop() {
       if (g_backlight) g_dirtyAll = true;
     }
   }
+
+  // Poll 6-axis IMU (detects vehicle/board movement vs stationary stop)
+  imuPoll();
 
   // Physical BOOT button (GPIO 0) short press cycles screens or wakes display
   static bool s_bootWas = false;
@@ -575,8 +737,8 @@ void loop() {
       break;
   }
 
-  // Auto-sleep after 10 min without BLE connection or touch
-  if (g_connected) {
+  // Auto-sleep after 10 min without BLE connection, IMU movement, or touch
+  if (g_connected || (g_hasImu && g_imuMoving)) {
     g_lastActivity = millis();
     if (g_pmuOk) common_activity();
   } else if (millis() - g_lastActivity > SLEEP_TIMEOUT_MS) {
@@ -594,6 +756,22 @@ void loop() {
   if (millis() - lastBat > 2000) {
     lastBat = millis();
     if (batteryPoll() && g_screen == SCR_INFO) g_dirtyAll = true;
+  }
+
+  // Step down 40 m -> 30 m -> 20 m -> 10 m inside the < 50 m turn zone.
+  // If the 6-axis IMU detects the vehicle/bike is stationary (e.g. stopped 20m before the turn),
+  // pause the countdown timer until movement resumes!
+  if (g_sub50Active && g_sub50Meters > 10) {
+    if (g_hasImu && !g_imuMoving) {
+      g_sub50StepAt = millis(); // Hold current meter distance while stopped
+    } else if (millis() - g_sub50StepAt >= g_msPer10m) {
+      g_sub50StepAt = millis();
+      g_sub50Meters -= 10;
+      g_distance = String(g_sub50Meters) + " m";
+      g_dirtyDist = true;
+      Serial.printf("[NAV] sub-50m step -> d='%s' (pace=%lu ms/10m)\n",
+                    g_distance.c_str(), (unsigned long)g_msPer10m);
+    }
   }
 
   // Redraw changed regions when display is active

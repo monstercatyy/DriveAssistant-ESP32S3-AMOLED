@@ -65,10 +65,12 @@ extern uint8_t  g_mediaState;   // 0 = stopped, 1 = paused, 2 = playing
 extern String   g_mediaTitle;
 extern String   g_mediaArtist;
 
-// Battery state
+// Battery & IMU state
 extern int      g_batLevel;     // -1 = unknown, 0..100 = percentage
 extern bool     g_batCharge;
 extern bool     g_hasBatteryIC;
+extern bool     g_hasImu;
+extern bool     g_imuMoving;
 
 // Dirty flags for partial/full screen redraws
 extern bool     g_dirtyAll;

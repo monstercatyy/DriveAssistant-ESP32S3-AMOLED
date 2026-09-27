@@ -16,6 +16,7 @@ Runtime hardware detection automatically identifies your board revision at boot 
 | **Display Panel** | **SH8601** (`368×448`, QSPI) | **CO5300** (`368×448`, QSPI, `col_offset1 = 16`) |
 | **Touch Controller** | **FT3168** (`I2C @ 0x38`) + XCA9554 (`@ 0x20`) | **CST816** (`I2C @ 0x15`) |
 | **Power Management** | **AXP2101 PMU** (`I2C @ 0x34`) | **AXP2101 PMU** (`I2C @ 0x34`) |
+| **Motion Sensor** | **QMI8658 6-Axis IMU** (`I2C @ 0x6B`) | **QMI8658 6-Axis IMU** (`I2C @ 0x6B`) |
 
 ---
 
@@ -24,12 +25,13 @@ Runtime hardware detection automatically identifies your board revision at boot 
 - **Crisp `200×200` Vector Maneuver Arrows**:
   - High-contrast Google Maps-style bent road stems and arrowheads rendered natively at `368×448` (`turn-left`, `turn-right`, `slight-left`, `slight-right`, `sharp-left`, `sharp-right`, `uturn`, `roundabout`, `merge`, `straight`, `arrive`).
   - Includes a `Scale3x` + bilinear iso-contour fallback renderer for custom `40×40` 1-bit bitmaps sent over BLE.
-- **`< 50 m` / `NOW` Immediate Turn Highlighting**:
-  - Automatically detects when Google Maps enters the `< 50 m` immediate turn zone and highlights `< 50 m` / `NOW` in bright accent green.
+- **Stop-Aware `< 50 m` Turn Zone Countdown (`QMI8658` 6-Axis IMU)**:
+  - Measures approach pace from prior `10 m` GPS steps (`80 m` $\rightarrow$ `70 m` $\rightarrow$ `60 m` $\rightarrow$ `50 m`) and smoothly counts down **`40 m` $\rightarrow$ `30 m` $\rightarrow$ `20 m` $\rightarrow$ `10 m`** in bright accent green inside the `< 50 m` turn zone.
+  - Polls the onboard **QMI8658 6-axis accelerometer + gyroscope** (`@ 0x6B`) at `40 Hz` to detect if you stop before the intersection (e.g., at a red light `20 m` before the turn) and **automatically pauses the countdown** until movement resumes.
 - **Music Playback Controller**:
   - Displays current track title, artist, and touch buttons for **Previous (`V`)**, **Play/Pause (`P`)**, and **Next (`N`)**.
-- **Battery & System Status**:
-  - Real-time battery percentage and charging indicator via the onboard **AXP2101** fuel gauge, BLE connection state, detected hardware variant (`V1` vs `V2`), and firmware version.
+- **Battery, IMU & System Status**:
+  - Real-time battery percentage and charging indicator via the onboard **AXP2101** fuel gauge, live **QMI8658 IMU** motion state (`Moving` / `Stationary`), BLE connection state, detected hardware variant (`V1` vs `V2`), and firmware version.
 
 ---
 

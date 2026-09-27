@@ -45,10 +45,16 @@ void screen_info_draw() {
   drawTextC(bat, 198, &FreeSans9pt7b, COL_STREET);
 
   drawTextC(g_connected ? "BLE Connected" : "BLE Disconnected",
-            245, &FreeSansBold12pt7b, g_connected ? COL_ARROW : COL_RED);
+            240, &FreeSansBold12pt7b, g_connected ? COL_ARROW : COL_RED);
+
+  String imuStr = !g_hasImu ? "IMU: not detected"
+                            : (g_imuMoving ? "IMU: QMI8658 (Moving)"
+                                           : "IMU: QMI8658 (Stationary)");
+  drawTextC(imuStr, 285, &FreeSans9pt7b,
+            (g_hasImu && g_imuMoving) ? COL_ARROW : COL_STREET);
 
   drawTextC(hw_is_v2() ? "HW: V2 (CO5300 + CST816)" : "HW: V1 (SH8601 + FT3168)",
-            295, &FreeSans9pt7b, COL_DIM);
+            325, &FreeSans9pt7b, COL_DIM);
 
-  drawTextC(String("Firmware v") + FW_VERSION, 335, &FreeSans9pt7b, COL_DIM);
+  drawTextC(String("Firmware v") + FW_VERSION, 365, &FreeSans9pt7b, COL_DIM);
 }

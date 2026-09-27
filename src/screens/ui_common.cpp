@@ -26,6 +26,8 @@ String   g_mediaArtist = "";
 int      g_batLevel     = -1;
 bool     g_batCharge    = false;
 bool     g_hasBatteryIC = false;
+bool     g_hasImu       = false;
+bool     g_imuMoving    = false;
 
 bool     g_dirtyAll    = true;
 bool     g_dirtyIcon   = false;

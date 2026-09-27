@@ -260,7 +260,10 @@ static void drawIconRegion() {
 static void drawDistRegion() {
   gfx->fillRect(20, DIST_RECT_Y, SCREEN_W - 40, DIST_RECT_H, COL_BG);
   if (g_distance.length()) {
-    uint16_t col = (g_distance == "NOW" || g_distance == "< 50 m") ? COL_ARROW : COL_DIST;
+    bool isClose = (g_distance == "40 m" || g_distance == "30 m" ||
+                    g_distance == "20 m" || g_distance == "10 m" ||
+                    g_distance == "NOW");
+    uint16_t col = isClose ? COL_ARROW : COL_DIST;
     drawTextC(g_distance, DIST_CY, &FreeSansBold24pt7b, col);
   }
 }
