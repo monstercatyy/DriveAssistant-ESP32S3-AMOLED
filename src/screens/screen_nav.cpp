@@ -303,13 +303,9 @@ static void drawWaiting() {
 
 static void drawEnded() {
   gfx->fillScreen(COL_BG);
-  const int16_t ccy = CY - 46;
-  gfx->fillCircle(CX, ccy, 64, COL_ARROW);
-  for (int8_t o = -4; o <= 4; o++) {
-    gfx->drawLine(CX - 28, ccy + 3 + o, CX - 9,  ccy + 22 + o, COL_BG);
-    gfx->drawLine(CX - 9,  ccy + 22 + o, CX + 30, ccy - 17 + o, COL_BG);
-  }
-  drawTextC("Navigation ended", CY + 54, &FreeSansBold12pt7b, COL_DIST);
+  drawArrive(ICON_CX, ICON_CY, COL_ARROW);
+  drawTextC("Arrived", DIST_CY, &FreeSansBold24pt7b, COL_ARROW);
+  drawTextC("Navigation ended", STREET_CY, &FreeSansBold12pt7b, COL_STREET);
 }
 
 // ===================== Public Component Entry Points =====================

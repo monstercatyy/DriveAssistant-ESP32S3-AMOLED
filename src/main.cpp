@@ -69,8 +69,10 @@ static int                   g_prevDistMeters = -1;
 static uint32_t              g_prevDistTimeMs = 0;
 static uint32_t              g_msPer10m       = 1000; // Pace per 10 m (default 1.0 s = 36 km/h)
 static bool                  g_sub50Active    = false;
+static bool                  g_sub50Done      = false;
 static int                   g_sub50Meters    = 40;
 static uint32_t              g_sub50StepAt    = 0;
+static uint32_t              g_sub50Hold10At  = 0;
 static int16_t               g_tapX = 0, g_tapY = 0;
 
 // ===================== Screen Dispatcher =====================
@@ -123,10 +125,16 @@ static int parseDistanceMeters(const String &d) {
 static String inferManeuverFromText(const String &text) {
   String t = text;
   t.toLowerCase();
+  t.trim();
   // MUST check destination/arrival FIRST so "Destination will be on the right/left"
+  // (or NavParser's extracted "the right" / "the left" after splitting on " on ")
   // is not misclassified as a right/left turn!
   if (t.indexOf("destination") >= 0 || t.indexOf("you have arrived") >= 0 ||
-      t.indexOf("arrived") >= 0 || t.indexOf("ziel") >= 0 || t.indexOf("angekommen") >= 0)
+      t.indexOf("you've arrived") >= 0 || t.indexOf("arrive") >= 0 ||
+      t.indexOf("arrived") >= 0 || t.indexOf("arriving") >= 0 ||
+      t.indexOf("ziel") >= 0 || t.indexOf("angekommen") >= 0 ||
+      t == "the right" || t == "the left" ||
+      t.startsWith("the right ") || t.startsWith("the left "))
     return "arrive";
   if (t.indexOf("roundabout") >= 0 || t.indexOf("kreisverkehr") >= 0 || t.indexOf("exit") >= 0)
     return "roundabout";
@@ -182,6 +190,9 @@ void applyPayload(const String &rawPayload) {
       distStr = String(tenthsKm / 10) + "." + String(tenthsKm % 10) + " km";
     }
 
+    g_sub50Active   = false;
+    g_sub50Done     = false;
+    g_sub50Hold10At = 0;
     payload = String(kManeuvers[idx]) + "|" + distStr + "|" + String(kLabels[idx]);
   } else {
     if (payload == g_lastPayload) return;
@@ -201,30 +212,57 @@ void applyPayload(const String &rawPayload) {
 
   int curMeters = (d == "< 50 m") ? -1 : parseDistanceMeters(d);
 
-  // If the street/notification text mentions destination/arrival (e.g. "Destination will be on the right"),
-  // always set m = "arrive".
+  // Clean up street string if NavParser.extractStreet split "Destination will be on the right/left"
+  // at " on ", or extracted "at <Destination>" from "You've arrived at <Destination>"
+  String sLow = s;
+  sLow.toLowerCase();
+  if (sLow == "the right" || sLow.startsWith("the right ")) {
+    m = "arrive";
+    s = "Destination on the right";
+  } else if (sLow == "the left" || sLow.startsWith("the left ")) {
+    m = "arrive";
+    s = "Destination on the left";
+  } else if (sLow.startsWith("at ") && s.length() > 3) {
+    m = "arrive";
+    s = s.substring(3);
+    s.trim();
+  }
+
+  // If the street/notification text mentions destination/arrival, always set m = "arrive".
   String inferredFromStreet = inferManeuverFromText(s);
   if (inferredFromStreet == "arrive") {
     m = "arrive";
   }
 
-  // Workaround for unpatched Android companion app where English subText ("Arrive at HH:MM")
-  // prematurely triggers m="arrive" while still far away (> 120 m).
-  if (m == "arrive" && !isTestPacket && !s.startsWith("Test:") &&
-      inferredFromStreet != "arrive" && curMeters > 120) {
-    if (inferredFromStreet != "straight") {
-      m = inferredFromStreet;
-    } else if (s == g_street && g_maneuver.length() > 0 &&
-               g_maneuver != "arrive" && g_maneuver != "clear" && g_maneuver != "end") {
-      m = g_maneuver;
+  // When Google Maps shows the final destination/arrival card (e.g. "at Bogo Cemetery", "Arrived",
+  // or the destination place name with no direction keyword), NavParser sends m = "unknown".
+  // Note: At initial route startup Google Maps may send raw='unknown|< 50 m|' with an EMPTY street (s == "").
+  // Only upgrade m == "unknown" to "arrive" when s is non-empty OR we already finished a sub-50m step!
+  if (m == "unknown") {
+    if (g_maneuver == "arrive" || g_sub50Done ||
+        (s.length() > 0 && (d == "< 50 m" || d.length() == 0 || (curMeters >= 0 && curMeters <= 60)))) {
+      m = "arrive";
     } else {
       m = "straight";
     }
   }
 
-  // Handle destination arrival vs immediate turn zone (< 50 m)
-  if (m == "arrive" && (d.length() == 0 || d == "0 m" || (curMeters >= 0 && curMeters <= 10))) {
+  // Reset g_sub50Done if we transitioned to a new street with a regular turn maneuver
+  if (m != "arrive" && s.length() > 0 && s != g_street) {
+    g_sub50Done     = false;
+    g_sub50Hold10At = 0;
+  }
+
+  // Handle destination arrival vs immediate turn zone (< 50 m):
+  // Note: NavParser substitutes d = "< 50 m" whenever a notification has no distance number
+  // (such as the "You have arrived" notification). So m == "arrive" with d == "< 50 m"
+  // (or curMeters <= 20, or after sub-50m countdown) means we have arrived!
+  if (m == "arrive" && !isTestPacket &&
+      (d == "< 50 m" || d.length() == 0 || d == "0 m" ||
+       (curMeters >= 0 && curMeters <= 20) || g_sub50Done)) {
     g_sub50Active    = false;
+    g_sub50Done      = true;
+    g_sub50Hold10At  = 0;
     g_prevDistMeters = -1;
     d = "Arrived";
     if (s.length() == 0) s = "Destination";
@@ -241,18 +279,31 @@ void applyPayload(const String &rawPayload) {
     }
 
     if (enteredSub50) {
-      // Start at 40 m when first entering the < 50 m zone; if already counting down,
-      // keep the current g_sub50Meters step (even if maneuver upgraded to "arrive"!)
-      if (!g_sub50Active) {
-        g_sub50Active = true;
-        g_sub50Meters = 40;
-        g_sub50StepAt = millis();
+      if (g_sub50Done) {
+        // We already completed the 40m -> 30m -> 20m -> 10m countdown on this step!
+        // Hold at 10 m for regular turns, or show Arrived if maneuver is arrive.
+        g_sub50Active = false;
+        d = (m == "arrive") ? String("Arrived") : String("10 m");
+        curMeters = (m == "arrive") ? 0 : 10;
+      } else {
+        // Start at 40 m when first entering the < 50 m zone; if already counting down,
+        // keep the current g_sub50Meters step.
+        if (!g_sub50Active) {
+          g_sub50Active   = true;
+          g_sub50Meters   = 40;
+          g_sub50StepAt   = millis();
+          g_sub50Hold10At = 0;
+        }
+        d = (g_sub50Meters <= 0 && m == "arrive") ? String("Arrived")
+                                                   : (String(g_sub50Meters) + " m");
+        curMeters = g_sub50Meters;
       }
-      d = (g_sub50Meters <= 0 && m == "arrive") ? String("Arrived")
-                                                : (String(g_sub50Meters) + " m");
-      curMeters = g_sub50Meters;
     } else if (curMeters > 0) {
-      g_sub50Active = false;
+      g_sub50Active   = false;
+      g_sub50Hold10At = 0;
+      if (curMeters > 50 || s != g_street) {
+        g_sub50Done = false;
+      }
       uint32_t now = millis();
       if (s == g_street && g_prevDistMeters > curMeters && g_prevDistTimeMs > 0) {
         int deltaM = g_prevDistMeters - curMeters;
@@ -278,6 +329,8 @@ void applyPayload(const String &rawPayload) {
     g_navEndedAt     = millis();
     g_prevDistMeters = -1;
     g_sub50Active    = false;
+    g_sub50Done      = false;
+    g_sub50Hold10At  = 0;
   }
   if (isNav) g_navEnded = false;
 
@@ -291,6 +344,8 @@ void applyPayload(const String &rawPayload) {
     g_iconValid      = false;
     g_prevDistMeters = -1;
     g_sub50Active    = false;
+    g_sub50Done      = false;
+    g_sub50Hold10At  = 0;
   }
 
   Serial.printf("[NAV] raw='%s' -> m='%s' d='%s' s='%s'\n",
@@ -860,16 +915,23 @@ void loop() {
         g_sub50Meters -= 10;
         g_distance = String(g_sub50Meters) + " m";
         g_dirtyDist = true;
+        if (g_sub50Meters == 10 && g_maneuver != "arrive") {
+          g_sub50Done   = true;
+          g_sub50Active = false; // Hold at 10 m until turn completes or destination card arrives
+        }
         Serial.printf("[NAV] sub-50m step -> d='%s' (pace=%lu ms/10m)\n",
                       g_distance.c_str(), (unsigned long)g_msPer10m);
       } else if (g_maneuver == "arrive") {
-        g_sub50Meters = 0;
-        g_sub50Active = false;
-        g_distance = "Arrived";
-        g_dirtyDist = true;
+        g_sub50Meters   = 0;
+        g_sub50Active   = false;
+        g_sub50Done     = true;
+        g_sub50Hold10At = 0;
+        g_distance      = "Arrived";
+        g_dirtyDist     = true;
         Serial.println("[NAV] destination reached -> d='Arrived'");
       } else {
-        g_sub50Active = false; // Hold at 10 m for regular turns until turn completes
+        g_sub50Active = false;
+        g_sub50Done   = true; // Hold at 10 m for regular turns until turn completes
       }
     }
   }
