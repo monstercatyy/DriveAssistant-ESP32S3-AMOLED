@@ -130,8 +130,7 @@ static String inferManeuverFromText(const String &text) {
   // (or NavParser's extracted "the right" / "the left" after splitting on " on ")
   // is not misclassified as a right/left turn!
   if (t.indexOf("destination") >= 0 || t.indexOf("you have arrived") >= 0 ||
-      t.indexOf("you've arrived") >= 0 || t.indexOf("arrive") >= 0 ||
-      t.indexOf("arrived") >= 0 || t.indexOf("arriving") >= 0 ||
+      t.indexOf("you've arrived") >= 0 || t.indexOf("arrived") >= 0 ||
       t.indexOf("ziel") >= 0 || t.indexOf("angekommen") >= 0 ||
       t == "the right" || t == "the left" ||
       t.startsWith("the right ") || t.startsWith("the left "))
@@ -209,6 +208,14 @@ void applyPayload(const String &rawPayload) {
     s = (p2 >= 0) ? payload.substring(p2 + 1) : "";
   }
   m.trim(); d.trim(); s.trim();
+  if (m == "arrived") m = "arrive";
+
+  // Strip any accidental ETA suffix (e.g. "Arrive 11:05 PM") from street string
+  int etaIdx = s.indexOf(" Arrive ");
+  if (etaIdx > 0) {
+    s = s.substring(0, etaIdx);
+    s.trim();
+  }
 
   int curMeters = (d == "< 50 m") ? -1 : parseDistanceMeters(d);
 
@@ -216,107 +223,77 @@ void applyPayload(const String &rawPayload) {
   // at " on ", or extracted "at <Destination>" from "You've arrived at <Destination>"
   String sLow = s;
   sLow.toLowerCase();
+  bool isAtDestination = false;
   if (sLow == "the right" || sLow.startsWith("the right ")) {
     m = "arrive";
     s = "Destination on the right";
+    isAtDestination = true;
   } else if (sLow == "the left" || sLow.startsWith("the left ")) {
     m = "arrive";
     s = "Destination on the left";
+    isAtDestination = true;
   } else if (sLow.startsWith("at ") && s.length() > 3) {
     m = "arrive";
     s = s.substring(3);
     s.trim();
+    isAtDestination = true;
   }
 
   // If the street/notification text mentions destination/arrival, always set m = "arrive".
   String inferredFromStreet = inferManeuverFromText(s);
   if (inferredFromStreet == "arrive") {
     m = "arrive";
+    isAtDestination = true;
+  }
+
+  // Distinguish stopped in traffic at an intermediate turn vs stopped at arrival:
+  // If we are on an active directional maneuver (turn-right, turn-left, straight, etc.)
+  // for this street and the street is NOT a destination card, keep the turn maneuver even at 0 m!
+  if (m == "arrive" && !isTestPacket && !isAtDestination) {
+    if (inferredFromStreet != "straight") {
+      m = inferredFromStreet;
+    } else if (s == g_street && g_maneuver.length() > 0 &&
+               g_maneuver != "arrive" && g_maneuver != "clear" && g_maneuver != "end") {
+      m = g_maneuver;
+    } else if (curMeters > 60) {
+      m = "straight";
+    }
   }
 
   // When Google Maps shows the final destination/arrival card (e.g. "at Bogo Cemetery", "Arrived",
   // or the destination place name with no direction keyword), NavParser sends m = "unknown".
-  // Note: At initial route startup Google Maps may send raw='unknown|< 50 m|' with an EMPTY street (s == "").
-  // Only upgrade m == "unknown" to "arrive" when s is non-empty OR we already finished a sub-50m step!
   if (m == "unknown") {
-    if (g_maneuver == "arrive" || g_sub50Done ||
-        (s.length() > 0 && (d == "< 50 m" || d.length() == 0 || (curMeters >= 0 && curMeters <= 60)))) {
+    if (isAtDestination || (s.length() > 0 && (d == "< 50 m" || d.length() == 0 || curMeters == 0))) {
       m = "arrive";
+      isAtDestination = true;
     } else {
       m = "straight";
     }
   }
 
-  // Reset g_sub50Done if we transitioned to a new street with a regular turn maneuver
-  if (m != "arrive" && s.length() > 0 && s != g_street) {
-    g_sub50Done     = false;
-    g_sub50Hold10At = 0;
-  }
+  g_sub50Active = false;
+  g_sub50Done   = false;
 
-  // Handle destination arrival vs immediate turn zone (< 50 m):
-  // Note: NavParser substitutes d = "< 50 m" whenever a notification has no distance number
-  // (such as the "You have arrived" notification). So m == "arrive" with d == "< 50 m"
-  // (or curMeters <= 20, or after sub-50m countdown) means we have arrived!
+  // Only show "Arrived" when m == "arrive" (actual destination) and distance is 0 m, empty, or "< 50 m".
+  // When stopped in traffic at a turn (m != "arrive"), 0 m stays d = "0 m" with the turn icon!
   if (m == "arrive" && !isTestPacket &&
-      (d == "< 50 m" || d.length() == 0 || d == "0 m" ||
-       (curMeters >= 0 && curMeters <= 20) || g_sub50Done)) {
-    g_sub50Active    = false;
-    g_sub50Done      = true;
-    g_sub50Hold10At  = 0;
+      (isAtDestination || d.length() == 0 || d == "0 m" || curMeters == 0 || d == "< 50 m")) {
     g_prevDistMeters = -1;
     d = "Arrived";
     if (s.length() == 0) s = "Destination";
+    payload = String("arrived|0 m|") + s;
   } else {
-    bool enteredSub50 = false;
-    if (m != "clear" && m != "end") {
-      if (d == "< 50 m" || d.length() == 0) {
-        enteredSub50 = true;
-      } else if (s.length() > 0 && s == g_street &&
-                 g_prevDistMeters > 0 && g_prevDistMeters <= 120 &&
-                 curMeters > g_prevDistMeters + 300) {
-        enteredSub50 = true;
-      }
+    if (d == "< 50 m") {
+      d = "40 m";
+      curMeters = 40;
+      payload = m + "|40 m|" + s;
+    } else if (curMeters == 0 && m != "arrive") {
+      d = "0 m";
+      payload = m + "|0 m|" + s;
     }
-
-    if (enteredSub50) {
-      if (g_sub50Done) {
-        // We already completed the 40m -> 30m -> 20m -> 10m countdown on this step!
-        // Hold at 10 m for regular turns, or show Arrived if maneuver is arrive.
-        g_sub50Active = false;
-        d = (m == "arrive") ? String("Arrived") : String("10 m");
-        curMeters = (m == "arrive") ? 0 : 10;
-      } else {
-        // Start at 40 m when first entering the < 50 m zone; if already counting down,
-        // keep the current g_sub50Meters step.
-        if (!g_sub50Active) {
-          g_sub50Active   = true;
-          g_sub50Meters   = 40;
-          g_sub50StepAt   = millis();
-          g_sub50Hold10At = 0;
-        }
-        d = (g_sub50Meters <= 0 && m == "arrive") ? String("Arrived")
-                                                   : (String(g_sub50Meters) + " m");
-        curMeters = g_sub50Meters;
-      }
-    } else if (curMeters > 0) {
-      g_sub50Active   = false;
-      g_sub50Hold10At = 0;
-      if (curMeters > 50 || s != g_street) {
-        g_sub50Done = false;
-      }
-      uint32_t now = millis();
-      if (s == g_street && g_prevDistMeters > curMeters && g_prevDistTimeMs > 0) {
-        int deltaM = g_prevDistMeters - curMeters;
-        uint32_t dt = now - g_prevDistTimeMs;
-        if (deltaM > 0 && deltaM <= 60 && dt >= 150 && dt <= 12000) {
-          uint32_t stepMs = (dt * 10UL) / (uint32_t)deltaM;
-          if (stepMs < 300)  stepMs = 300;  // Max ~120 km/h
-          if (stepMs > 2500) stepMs = 2500; // Min ~14 km/h
-          g_msPer10m = (g_msPer10m * 3 + stepMs * 5) / 8;
-        }
-      }
+    if (curMeters >= 0) {
       g_prevDistMeters = curMeters;
-      g_prevDistTimeMs = now;
+      g_prevDistTimeMs = millis();
     }
   }
 
@@ -893,47 +870,6 @@ void loop() {
   if (millis() - lastBat > 2000) {
     lastBat = millis();
     if (batteryPoll() && g_screen == SCR_INFO) g_dirtyAll = true;
-  }
-
-  // Track whether the board has physically moved during this navigation route
-  // so stationary desk/Lockito testing counts down smoothly instead of freezing at 40 m.
-  static bool s_imuMovedDuringNav = false;
-  if (!g_navShown) {
-    s_imuMovedDuringNav = false;
-  } else if (g_hasImu && g_imuMoving) {
-    s_imuMovedDuringNav = true;
-  }
-
-  // Step down 40 m -> 30 m -> 20 m -> 10 m inside the < 50 m turn zone
-  // (and -> "Arrived" when approaching destination).
-  if (g_sub50Active && g_sub50Meters > 0) {
-    if (g_hasImu && s_imuMovedDuringNav && !g_imuMoving) {
-      g_sub50StepAt = millis(); // Hold current meter distance while stopped in traffic
-    } else if (millis() - g_sub50StepAt >= g_msPer10m) {
-      g_sub50StepAt = millis();
-      if (g_sub50Meters > 10) {
-        g_sub50Meters -= 10;
-        g_distance = String(g_sub50Meters) + " m";
-        g_dirtyDist = true;
-        if (g_sub50Meters == 10 && g_maneuver != "arrive") {
-          g_sub50Done   = true;
-          g_sub50Active = false; // Hold at 10 m until turn completes or destination card arrives
-        }
-        Serial.printf("[NAV] sub-50m step -> d='%s' (pace=%lu ms/10m)\n",
-                      g_distance.c_str(), (unsigned long)g_msPer10m);
-      } else if (g_maneuver == "arrive") {
-        g_sub50Meters   = 0;
-        g_sub50Active   = false;
-        g_sub50Done     = true;
-        g_sub50Hold10At = 0;
-        g_distance      = "Arrived";
-        g_dirtyDist     = true;
-        Serial.println("[NAV] destination reached -> d='Arrived'");
-      } else {
-        g_sub50Active = false;
-        g_sub50Done   = true; // Hold at 10 m for regular turns until turn completes
-      }
-    }
   }
 
   // Redraw changed regions when display is active
