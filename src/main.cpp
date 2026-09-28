@@ -38,8 +38,9 @@
 #define XCA9554_ADDR     0x20
 #define SWIPE_MIN_PX     40
 #define LONGPRESS_MS     600
-#define SLEEP_TIMEOUT_MS (10UL * 60UL * 1000UL)   // 10 min without BLE/motion/touch -> power off
-#define NAV_END_SHOW_MS  3500UL                   // Show "Navigation ended" for 3.5 s
+#define SLEEP_TIMEOUT_MS   (10UL * 60UL * 1000UL)   // 10 min without BLE/motion/touch -> power off
+#define NAV_END_SHOW_MS    20000UL                  // Return to Waiting for Google Maps after 20 s
+#define ARRIVED_TIMEOUT_MS 20000UL                  // Auto-return to Waiting for Google Maps 20 s after Arrived
 
 enum TouchEvent : uint8_t {
   TE_NONE = 0,
@@ -64,6 +65,8 @@ static bool                  g_pmuOk          = false;
 static bool                  g_backlight      = true;
 static uint32_t              g_lastActivity   = 0;
 static uint32_t              g_navEndedAt     = 0;
+static uint32_t              g_arrivedAt      = 0;
+static bool                  g_arrivedDismissed = false;
 static String                g_lastPayload    = "";
 static int                   g_prevDistMeters = -1;
 static uint32_t              g_prevDistTimeMs = 0;
@@ -74,6 +77,21 @@ static int                   g_sub50Meters    = 40;
 static uint32_t              g_sub50StepAt    = 0;
 static uint32_t              g_sub50Hold10At  = 0;
 static int16_t               g_tapX = 0, g_tapY = 0;
+
+static void dismissNavToHome(const char *reason) {
+  g_maneuver         = "";
+  g_distance         = "";
+  g_street           = "";
+  g_navEnded         = false;
+  g_navShown         = false;
+  g_iconValid        = false;
+  g_arrivedAt        = 0;
+  g_navEndedAt       = 0;
+  g_arrivedDismissed = true;
+  g_screen           = SCR_MAIN;
+  g_dirtyAll         = true;
+  Serial.printf("[UI] Returned to Waiting for Google Maps (%s)\n", reason);
+}
 
 // ===================== Screen Dispatcher =====================
 void redraw() {
@@ -274,6 +292,13 @@ void applyPayload(const String &rawPayload) {
   g_sub50Active = false;
   g_sub50Done   = false;
 
+  if (m != "arrive" && m != "end" && m != "clear") {
+    g_arrivedDismissed = false;
+    g_arrivedAt        = 0;
+  } else if (g_arrivedDismissed && !isTestPacket) {
+    return;
+  }
+
   // Only show "Arrived" when m == "arrive" (actual destination) and distance is 0 m, empty, or "< 50 m".
   // When stopped in traffic at a turn (m != "arrive"), 0 m stays d = "0 m" with the turn icon!
   if (m == "arrive" && !isTestPacket &&
@@ -282,6 +307,7 @@ void applyPayload(const String &rawPayload) {
     d = "Arrived";
     if (s.length() == 0) s = "Destination";
     payload = String("arrived|0 m|") + s;
+    if (g_arrivedAt == 0) g_arrivedAt = millis();
   } else {
     if (d == "< 50 m") {
       d = "40 m";
@@ -303,7 +329,7 @@ void applyPayload(const String &rawPayload) {
 
   if (m == "end" && wasNav) {
     g_navEnded       = true;
-    g_navEndedAt     = millis();
+    g_navEndedAt     = (g_arrivedAt > 0) ? g_arrivedAt : millis();
     g_prevDistMeters = -1;
     g_sub50Active    = false;
     g_sub50Done      = false;
@@ -826,8 +852,14 @@ void loop() {
       if (!g_backlight) {
         setBacklight(true);
         g_dirtyAll = true;
+      } else if ((g_maneuver == "arrive" && g_distance == "Arrived") || g_navEnded) {
+        dismissNavToHome("display tap");
       } else if (g_screen == SCR_MEDIA) {
         screen_media_tap(g_tapX, g_tapY);
+      } else if (g_screen != SCR_MAIN) {
+        g_screen   = SCR_MAIN;
+        g_dirtyAll = true;
+        Serial.println("[UI] Tap -> Home (Screen 0)");
       }
       break;
     case TE_LONG_PRESS:
@@ -859,10 +891,12 @@ void loop() {
     goToSleep();
   }
 
-  // Clear "Navigation ended" screen after timeout
-  if (g_navEnded && millis() - g_navEndedAt > NAV_END_SHOW_MS) {
-    g_navEnded = false;
-    g_dirtyAll = true;
+  // Auto-return to "Waiting for Google Maps" home screen 20 seconds after destination arrival
+  if ((g_maneuver == "arrive" && g_distance == "Arrived") || g_navEnded) {
+    uint32_t startMs = (g_arrivedAt > 0) ? g_arrivedAt : g_navEndedAt;
+    if (startMs > 0 && millis() - startMs >= ARRIVED_TIMEOUT_MS) {
+      dismissNavToHome("20s arrival timeout");
+    }
   }
 
   // Poll battery every 2 seconds
