@@ -23,11 +23,17 @@
 
 // ===================== Colour Palette (RGB565) =====================
 #define COL_BG          0x0000        // Pure black (AMOLED pixels off)
-#define COL_ARROW       0x07E8        // Accent green
-#define COL_DIST        0xFFFF        // White
-#define COL_STREET      0xC618        // Light grey
+#define COL_ARROW       0x07E8        // Fixed accent green (UI / status / media screens)
+#define COL_DIST        0xFFFF        // Fixed white (UI / status / media screens)
+#define COL_STREET      0xC618        // Fixed light grey (UI / status / media screens)
 #define COL_DIM         0x4208        // Dark grey
 #define COL_RED         0xF800        // Red (disconnected / low battery)
+
+// Configurable colors exclusively for active Navigation screen (screen_nav.cpp)
+extern uint16_t g_colNavArrow;
+extern uint16_t g_colNavDist;
+extern uint8_t  g_cpuMhz;
+extern bool     g_pollHigh;
 
 // ===================== Icon Bitmap Constants =====================
 #define ICON_W          40

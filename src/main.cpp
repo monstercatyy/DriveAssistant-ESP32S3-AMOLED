@@ -15,6 +15,7 @@
 #include <Arduino.h>
 #include <Wire.h>
 #include <NimBLEDevice.h>
+#include <Preferences.h>
 #include <esp_sleep.h>
 
 #include "pin_config.h"
@@ -54,6 +55,11 @@ enum TouchEvent : uint8_t {
 
 // ===================== Hardware & Runtime Globals =====================
 XPowersPMU power;
+uint16_t g_colNavArrow = 0x07E8; // Default green (Navigation screen only)
+uint16_t g_colNavDist  = 0xFFFF; // Default white (Navigation screen only)
+uint8_t  g_cpuMhz      = 160;    // Default MED (160 MHz): 80, 160, or 240
+bool     g_pollHigh    = false;  // Default LOW (false = Power-save polling, true = 100Hz High polling)
+static Preferences g_prefs;
 
 static Arduino_DataBus *bus = new Arduino_ESP32QSPI(
     LCD_CS, LCD_SCLK, LCD_SDIO0, LCD_SDIO1, LCD_SDIO2, LCD_SDIO3);
@@ -174,8 +180,55 @@ static String inferManeuverFromText(const String &text) {
   return "straight";
 }
 
+static volatile bool g_cfgDirty = false;
+
 void applyPayload(const String &rawPayload) {
   String payload = rawPayload;
+
+  // Handle live display & power settings from Android app:
+  // cfg|b=<5..255>|a=<hexRGB565>|d=<hexRGB565>|c=<80|160|240>|p=<0|1>
+  // IMPORTANT: Only update RAM variables here; loop() applies hardware & debounced NVS saves.
+  if (payload.startsWith("cfg|")) {
+    int bIdx = payload.indexOf("b=");
+    if (bIdx >= 0) {
+      int endIdx = payload.indexOf('|', bIdx);
+      String bStr = (endIdx >= 0) ? payload.substring(bIdx + 2, endIdx) : payload.substring(bIdx + 2);
+      g_config.brightness = constrain(bStr.toInt(), 5, 255);
+    }
+    int aIdx = payload.indexOf("a=");
+    if (aIdx >= 0) {
+      int endIdx = payload.indexOf('|', aIdx);
+      String aStr = (endIdx >= 0) ? payload.substring(aIdx + 2, endIdx) : payload.substring(aIdx + 2);
+      uint16_t aCol = (uint16_t)strtoul(aStr.c_str(), nullptr, 16);
+      if (aCol != 0) g_colNavArrow = aCol;
+    }
+    int dIdx = payload.indexOf("d=");
+    if (dIdx >= 0) {
+      int endIdx = payload.indexOf('|', dIdx);
+      String dStr = (endIdx >= 0) ? payload.substring(dIdx + 2, endIdx) : payload.substring(dIdx + 2);
+      uint16_t dCol = (uint16_t)strtoul(dStr.c_str(), nullptr, 16);
+      if (dCol != 0) g_colNavDist = dCol;
+    }
+    int cIdx = payload.indexOf("c=");
+    if (cIdx >= 0) {
+      int endIdx = payload.indexOf('|', cIdx);
+      String cStr = (endIdx >= 0) ? payload.substring(cIdx + 2, endIdx) : payload.substring(cIdx + 2);
+      int mhz = cStr.toInt();
+      if (mhz == 80 || mhz == 160 || mhz == 240) {
+        g_cpuMhz = (uint8_t)mhz;
+      }
+    }
+    int pIdx = payload.indexOf("p=");
+    if (pIdx >= 0) {
+      int endIdx = payload.indexOf('|', pIdx);
+      String pStr = (endIdx >= 0) ? payload.substring(pIdx + 2, endIdx) : payload.substring(pIdx + 2);
+      g_pollHigh = (pStr.toInt() != 0);
+    }
+    g_cfgDirty = true;
+    g_dirtyAll = true;
+    return;
+  }
+
   bool isTestPacket = (payload == "turn-right|200 m|Teststrasse" ||
                        payload.endsWith("|Teststrasse"));
 
@@ -615,9 +668,12 @@ static void imuInit() {
 
 static void imuPoll() {
   if (!g_hasImu) return;
+  // Power optimization: when BLE is connected, IMU is only needed if viewing the Status screen (SCR_INFO)
+  if (g_connected && g_screen != SCR_INFO) return;
+
   static uint32_t s_lastImuMs = 0;
   uint32_t now = millis();
-  if (now - s_lastImuMs < 25) return; // 40 Hz polling
+  if (now - s_lastImuMs < (g_pollHigh ? 25 : 80)) return;
   s_lastImuMs = now;
 
   uint8_t status0 = 0;
@@ -752,7 +808,19 @@ void setup() {
     Serial.println("[GFX] Display & PSRAM canvas initialized (368x448)");
   }
 
-  g_panel->setBrightness(g_config.brightness > 0 ? (uint8_t)g_config.brightness : 200);
+  // Load saved brightness, nav colors, CPU speed, and polling rate from NVS Preferences
+  g_prefs.begin("drive_cfg", false);
+  g_config.brightness = g_prefs.getUChar("bright", 255);
+  g_colNavArrow       = g_prefs.getUShort("colArrow", 0x07E8);
+  g_colNavDist        = g_prefs.getUShort("colDist", 0xFFFF);
+  uint8_t savedMhz    = g_prefs.getUChar("cpuMhz", 160);
+  if (savedMhz == 80 || savedMhz == 160 || savedMhz == 240) g_cpuMhz = savedMhz;
+  g_pollHigh          = g_prefs.getBool("pollHigh", false);
+
+  setCpuFrequencyMhz(g_cpuMhz);
+  Serial.printf("[PWR] CPU=%u MHz, Poll=%s\n", g_cpuMhz, g_pollHigh ? "HIGH" : "LOW");
+
+  g_panel->setBrightness(g_config.brightness > 0 ? (uint8_t)g_config.brightness : 255);
   gfx->fillScreen(COL_BG);
   redraw();
   setBacklight(true);
@@ -809,18 +877,24 @@ void setup() {
 }
 
 void loop() {
+  uint32_t nowMs = millis();
+
   if (g_pmuOk) {
-    common_tick();
-    // Physical PWR button short press toggles display on/off
-    if (common_consume_pwr_short()) {
-      common_activity();
-      g_lastActivity = millis();
-      setBacklight(!g_backlight);
-      if (g_backlight) g_dirtyAll = true;
+    static uint32_t s_lastPmuMs = 0;
+    if (g_pollHigh || (nowMs - s_lastPmuMs >= 100)) {
+      s_lastPmuMs = nowMs;
+      common_tick();
+      // Physical PWR button short press toggles display on/off
+      if (common_consume_pwr_short()) {
+        common_activity();
+        g_lastActivity = nowMs;
+        setBacklight(!g_backlight);
+        if (g_backlight) g_dirtyAll = true;
+      }
     }
   }
 
-  // Poll 6-axis IMU (detects vehicle/board movement vs stationary stop)
+  // Poll 6-axis IMU (auto-skipped when BLE connected & not on SCR_INFO)
   imuPoll();
 
   // Physical BOOT button (GPIO 0) short press cycles screens or wakes display
@@ -828,7 +902,7 @@ void loop() {
   bool bootNow = (digitalRead(0) == LOW);
   if (!bootNow && s_bootWas) {
     if (g_pmuOk) common_activity();
-    g_lastActivity = millis();
+    g_lastActivity = nowMs;
     if (!g_backlight) {
       setBacklight(true);
       g_dirtyAll = true;
@@ -840,10 +914,15 @@ void loop() {
   }
   s_bootWas = bootNow;
 
-  // Touch gesture polling
-  TouchEvent ev = touchPoll();
+  // Touch gesture polling (throttled in LOW poll mode to cut I2C traffic)
+  static uint32_t s_lastTouchMs = 0;
+  TouchEvent ev = TE_NONE;
+  if (g_pollHigh || (nowMs - s_lastTouchMs >= 35)) {
+    s_lastTouchMs = nowMs;
+    ev = touchPoll();
+  }
   if (ev != TE_NONE) {
-    g_lastActivity = millis();
+    g_lastActivity = nowMs;
     if (g_pmuOk) common_activity();
   }
 
@@ -885,25 +964,56 @@ void loop() {
 
   // Auto-sleep after 10 min without BLE connection, IMU movement, or touch
   if (g_connected || (g_hasImu && g_imuMoving)) {
-    g_lastActivity = millis();
+    g_lastActivity = nowMs;
     if (g_pmuOk) common_activity();
-  } else if (millis() - g_lastActivity > SLEEP_TIMEOUT_MS) {
+  } else if (nowMs - g_lastActivity > SLEEP_TIMEOUT_MS) {
     goToSleep();
   }
 
   // Auto-return to "Waiting for Google Maps" home screen 20 seconds after destination arrival
   if ((g_maneuver == "arrive" && g_distance == "Arrived") || g_navEnded) {
     uint32_t startMs = (g_arrivedAt > 0) ? g_arrivedAt : g_navEndedAt;
-    if (startMs > 0 && millis() - startMs >= ARRIVED_TIMEOUT_MS) {
+    if (startMs > 0 && nowMs - startMs >= ARRIVED_TIMEOUT_MS) {
       dismissNavToHome("20s arrival timeout");
     }
   }
 
   // Poll battery every 2 seconds
   static uint32_t lastBat = 0;
-  if (millis() - lastBat > 2000) {
-    lastBat = millis();
+  if (nowMs - lastBat > 2000) {
+    lastBat = nowMs;
     if (batteryPoll() && g_screen == SCR_INFO) g_dirtyAll = true;
+  }
+
+  // Apply pending display & power config changes immediately on the UI loop thread,
+  // and debounce NVS flash writes (1000 ms) so slider dragging never spams flash.
+  static bool     s_nvsDirty    = false;
+  static uint32_t s_nvsSaveAtMs = 0;
+  if (g_cfgDirty) {
+    g_cfgDirty = false;
+    if (!g_backlight) setBacklight(true);
+    if (g_panel) {
+      g_panel->setBrightness((uint8_t)g_config.brightness);
+    }
+    if (getCpuFrequencyMhz() != g_cpuMhz) {
+      setCpuFrequencyMhz(g_cpuMhz);
+    }
+    s_nvsDirty    = true;
+    s_nvsSaveAtMs = nowMs;
+    g_dirtyAll    = true;
+    Serial.printf("[CFG] bright=%d arrow=0x%04X dist=0x%04X cpu=%uMHz poll=%s\n",
+                  g_config.brightness, g_colNavArrow, g_colNavDist,
+                  g_cpuMhz, g_pollHigh ? "HIGH" : "LOW");
+  }
+
+  if (s_nvsDirty && (nowMs - s_nvsSaveAtMs >= 1000)) {
+    s_nvsDirty = false;
+    g_prefs.putUChar("bright",   (uint8_t)g_config.brightness);
+    g_prefs.putUShort("colArrow", g_colNavArrow);
+    g_prefs.putUShort("colDist",  g_colNavDist);
+    g_prefs.putUChar("cpuMhz",   g_cpuMhz);
+    g_prefs.putBool("pollHigh",  g_pollHigh);
+    Serial.println("[CFG] Saved settings to NVS flash");
   }
 
   // Redraw changed regions when display is active
@@ -913,10 +1023,5 @@ void loop() {
     redraw();
   }
 
-  // Animate waiting screen spinner when idle on main screen
-  if (g_backlight && g_screen == SCR_MAIN && !g_navShown && !g_navEnded) {
-    screen_nav_animate_waiting();
-  }
-
-  delay(10);
+  delay(g_pollHigh ? 10 : 20);
 }

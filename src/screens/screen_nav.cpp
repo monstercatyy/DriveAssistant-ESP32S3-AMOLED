@@ -129,12 +129,12 @@ static void renderIconCanvas() {
 
       uint16_t c;
       if (val >= 146) {
-        c = COL_ARROW;
+        c = g_colNavArrow;
       } else if (val <= 110) {
         c = COL_BG;
       } else {
         uint8_t alpha = (uint8_t)(((val - 110) * 255) / 36);
-        c = blend565(COL_ARROW, COL_BG, alpha);
+        c = blend565(g_colNavArrow, COL_BG, alpha);
       }
       g_iconCanvas[y * OUT_ICON_W + x] = c;
     }
@@ -259,18 +259,13 @@ static void drawIconRegion() {
   }
 
   gfx->fillRect(ICON_AREA_X, ICON_AREA_Y, ICON_AREA_W, ICON_AREA_H, COL_BG);
-  drawManeuverVector(ICON_CX, ICON_CY, g_maneuver, COL_ARROW);
+  drawManeuverVector(ICON_CX, ICON_CY, g_maneuver, g_colNavArrow);
 }
 
 static void drawDistRegion() {
   gfx->fillRect(20, DIST_RECT_Y, SCREEN_W - 40, DIST_RECT_H, COL_BG);
   if (g_distance.length()) {
-    bool isClose = (g_distance == "40 m" || g_distance == "30 m" ||
-                    g_distance == "20 m" || g_distance == "10 m" ||
-                    g_distance == "0 m"  || g_distance == "NOW"  ||
-                    g_distance == "Arrived" || g_maneuver == "arrive");
-    uint16_t col = isClose ? COL_ARROW : COL_DIST;
-    drawTextC(g_distance, DIST_CY, &FreeSansBold24pt7b, col);
+    drawTextC(g_distance, DIST_CY, &FreeSansBold24pt7b, g_colNavDist);
   }
 }
 
@@ -278,34 +273,26 @@ static void drawStreetRegion() {
   gfx->fillRect(20, STREET_RECT_Y, SCREEN_W - 40, STREET_RECT_H, COL_BG);
   if (g_street.length())
     drawTextC(fitStreet(g_street, &FreeSansBold12pt7b, STREET_MAX_W),
-              STREET_CY, &FreeSansBold12pt7b, COL_STREET);
+              STREET_CY, &FreeSansBold12pt7b, 0xFFFF);
 }
 
 // ===================== Waiting & Ended Screens =====================
-static void spinPoint(int deg, int16_t &x, int16_t &y) {
-  float rad = deg * PI / 180.0f;
-  x = CX + (int16_t)lroundf(sinf(rad) * SPIN_R);
-  y = CY - (int16_t)lroundf(cosf(rad) * SPIN_R);
-}
-
-static inline uint16_t grey565(uint8_t v) {
-  return ((v & 0xF8) << 8) | ((v & 0xFC) << 3) | (v >> 3);
-}
-
 static void drawWaiting() {
   gfx->fillScreen(COL_BG);
-  drawTextC("Drive Assistant", CY - 18, &FreeSansBold12pt7b, COL_DIST);
-  if (g_connected)
-    drawTextC("Waiting for Google Maps", CY + 22, &FreeSans9pt7b, COL_ARROW);
-  else
-    drawTextC("Looking for your phone", CY + 22, &FreeSans9pt7b, COL_STREET);
+  if (g_connected) {
+    drawTextC("CONNECTED", CY - 16, &FreeSansBold12pt7b, 0xFFFF);
+    drawTextC("WAITING",   CY + 20, &FreeSansBold12pt7b, 0x8410);
+  } else {
+    drawTextC("NO PHONE",  CY - 16, &FreeSansBold12pt7b, 0xFFFF);
+    drawTextC("WAITING",   CY + 20, &FreeSansBold12pt7b, 0x8410);
+  }
 }
 
 static void drawEnded() {
   gfx->fillScreen(COL_BG);
-  drawArrive(ICON_CX, ICON_CY, COL_ARROW);
-  drawTextC("Arrived", DIST_CY, &FreeSansBold24pt7b, COL_ARROW);
-  drawTextC("Navigation ended", STREET_CY, &FreeSansBold12pt7b, COL_STREET);
+  drawArrive(ICON_CX, ICON_CY, g_colNavArrow);
+  drawTextC("Arrived", DIST_CY, &FreeSansBold24pt7b, g_colNavDist);
+  drawTextC("Navigation ended", STREET_CY, &FreeSansBold12pt7b, 0xFFFF);
 }
 
 // ===================== Public Component Entry Points =====================
@@ -331,22 +318,5 @@ void screen_nav_draw() {
 }
 
 void screen_nav_animate_waiting() {
-  uint32_t now = millis();
-  if (now - s_lastFrame < 30) return;
-  s_lastFrame = now;
-
-  int16_t x, y;
-  for (int k = 1; k <= SPIN_STEP; k++) {
-    spinPoint(s_spinDeg - SPIN_LEN - k, x, y);
-    gfx->fillCircle(x, y, 3, COL_BG);
-  }
-
-  s_spinDeg = (s_spinDeg + SPIN_STEP) % 360;
-
-  for (int i = 0; i <= SPIN_LEN; i++) {
-    spinPoint(s_spinDeg - (SPIN_LEN - i), x, y);
-    gfx->fillCircle(x, y, 2, grey565(20 + (uint8_t)((235 * i) / SPIN_LEN)));
-  }
-
-  flushDisplay();
+  // Spinner removed for power savings — static waiting screen uses 0 QSPI transfers
 }

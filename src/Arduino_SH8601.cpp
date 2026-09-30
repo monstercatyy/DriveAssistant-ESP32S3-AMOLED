@@ -75,6 +75,8 @@ void Arduino_SH8601::setBrightness(uint8_t brightness)
 {
   _bus->beginWrite();
   _bus->writeC8D8(SH8601_W_WDBRIGHTNESSVALNOR, brightness);
+  _bus->writeC8D8(SH8601_W_WDBRIGHTNESSVALHBM, brightness);
+  _bus->writeC8D8(SH8601_W_WCE, (brightness >= 220) ? 0x07 : 0x00);
   _bus->endWrite();
 }
 
