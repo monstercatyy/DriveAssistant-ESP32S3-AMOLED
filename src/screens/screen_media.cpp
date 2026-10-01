@@ -10,17 +10,17 @@
 
 void screen_media_draw() {
   gfx->fillScreen(COL_BG);
-  drawTextC("Music", 66, &FreeSansBold12pt7b, COL_DIST);
+  drawTextC("NOW PLAYING", 66, &SFCompactBold12pt7b, COL_DIST);
 
   if (g_mediaState == 0) {
-    drawTextC("Nothing playing", CY + 10, &FreeSansBold12pt7b, COL_STREET);
+    drawTextC("Nothing playing", CY + 10, &SFCompactBold12pt7b, COL_STREET);
     return;
   }
 
   drawTextC(fitStreet(g_mediaTitle.length() ? g_mediaTitle : "Unknown",
-                      &FreeSansBold12pt7b, 320), 145, &FreeSansBold12pt7b, COL_DIST);
-  drawTextC(fitStreet(g_mediaArtist, &FreeSans9pt7b, 300),
-            190, &FreeSans9pt7b, COL_STREET);
+                      &SFCompactBold12pt7b, 320), 145, &SFCompactBold12pt7b, COL_DIST);
+  drawTextC(fitStreet(g_mediaArtist, &SFCompactBold9pt7b, 300),
+            190, &SFCompactBold9pt7b, COL_STREET);
 
   const int16_t y     = MEDIA_BTN_CY;
   const int16_t prevX = CX - 104;  // 80

@@ -9,6 +9,11 @@
 #include "Arduino_GFX_Library.h"
 #include "canvas/Arduino_Canvas.h"
 #include "pin_config.h"
+#include "fonts/SFCompactBold9pt7b.h"
+#include "fonts/SFCompactBold12pt7b.h"
+#include "fonts/SFCompactBold16pt7b.h"
+#include "fonts/SFCompactBold24pt7b.h"
+#include "fonts/SFCompactBold48pt7b.h"
 #include "fonts/FreeSans9pt7b.h"
 #include "fonts/FreeSansBold12pt7b.h"
 #include "fonts/FreeSansBold24pt7b.h"
@@ -28,6 +33,12 @@
 #define COL_STREET      0xC618        // Fixed light grey (UI / status / media screens)
 #define COL_DIM         0x4208        // Dark grey
 #define COL_RED         0xF800        // Red (disconnected / low battery)
+
+// Gauge & Navigation UI additions (matching Figma design)
+#define COL_GAUGE_BG    0x0186        // Inactive circular arc track (#00EEFF at 20% opacity)
+#define COL_GAUGE_FG    0x077F        // Active circular distance bar (#00EEFF electric cyan)
+#define COL_DASH        0x2965        // Dashed road stem blocks (#FFFFFF at 15% opacity)
+#define COL_DIM_WHITE   0xAD55        // Dim white for street & distance unit (Figma 50% opacity)
 
 // Configurable colors exclusively for active Navigation screen (screen_nav.cpp)
 extern uint16_t g_colNavArrow;
@@ -60,6 +71,8 @@ extern uint8_t  g_screen;
 extern String   g_maneuver;
 extern String   g_distance;
 extern String   g_street;
+extern float    g_navProgress;   // 0.0f .. 1.0f (0-100% distance to maneuver)
+extern int      g_maxLegMeters;  // Max observed meters for current maneuver
 extern bool     g_navEnded;
 extern bool     g_navShown;
 extern uint8_t  g_iconBits[ICON_W * ICON_H / 8];

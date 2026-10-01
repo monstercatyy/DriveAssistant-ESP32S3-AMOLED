@@ -32,7 +32,7 @@ static void drawBatterySymbol(int16_t cx0, int16_t cy0) {
 
 void screen_info_draw() {
   gfx->fillScreen(COL_BG);
-  drawTextC("Status", 66, &FreeSansBold12pt7b, COL_DIST);
+  drawTextC("Status", 66, &SFCompactBold12pt7b, COL_DIST);
 
   drawBatterySymbol(CX, 138);
   String bat;
@@ -42,19 +42,23 @@ void screen_info_draw() {
     bat = "Battery " + String(g_batLevel) + "%";
     if (g_batCharge) bat += " - charging";
   }
-  drawTextC(bat, 198, &FreeSans9pt7b, COL_STREET);
+  drawTextC(bat, 198, &SFCompactBold9pt7b, COL_STREET);
 
   drawTextC(g_connected ? "BLE Connected" : "BLE Disconnected",
-            240, &FreeSansBold12pt7b, g_connected ? COL_ARROW : COL_RED);
+            240, &SFCompactBold12pt7b, g_connected ? COL_ARROW : COL_RED);
 
   String imuStr = !g_hasImu ? "IMU: not detected"
                             : (g_imuMoving ? "IMU: QMI8658 (Moving)"
                                            : "IMU: QMI8658 (Stationary)");
-  drawTextC(imuStr, 285, &FreeSans9pt7b,
+  drawTextC(imuStr, 285, &SFCompactBold9pt7b,
             (g_hasImu && g_imuMoving) ? COL_ARROW : COL_STREET);
 
   drawTextC(hw_is_v2() ? "HW: V2 (CO5300 + CST816)" : "HW: V1 (SH8601 + FT3168)",
-            325, &FreeSans9pt7b, COL_DIM);
+            320, &SFCompactBold9pt7b, COL_DIM);
 
-  drawTextC(String("Firmware v") + FW_VERSION, 365, &FreeSans9pt7b, COL_DIM);
+  char cpuBuf[40];
+  snprintf(cpuBuf, sizeof(cpuBuf), "CPU: %uMHz | Poll: %s", g_cpuMhz, g_pollHigh ? "HIGH" : "LOW");
+  drawTextC(cpuBuf, 355, &SFCompactBold9pt7b, COL_DIM);
+
+  drawTextC(String("Firmware v") + FW_VERSION, 390, &SFCompactBold9pt7b, COL_DIM);
 }

@@ -88,6 +88,8 @@ static void dismissNavToHome(const char *reason) {
   g_maneuver         = "";
   g_distance         = "";
   g_street           = "";
+  g_navProgress      = 0.0f;
+  g_maxLegMeters     = -1;
   g_navEnded         = false;
   g_navShown         = false;
   g_iconValid        = false;
@@ -233,37 +235,36 @@ void applyPayload(const String &rawPayload) {
                        payload.endsWith("|Teststrasse"));
 
   if (isTestPacket) {
+    // Exact 11 maneuvers and preview states from Figma design (Row 2):
     static const char *const kManeuvers[] = {
-      "turn-right",   "turn-left",    "slight-right", "slight-left",
-      "sharp-right",  "sharp-left",   "uturn",        "roundabout",
-      "merge",        "straight",     "arrive"
+      "straight",     "turn-right",   "turn-left",    "slight-right",
+      "slight-left",  "sharp-right",  "sharp-left",   "uturn",
+      "merge",        "roundabout",   "arrive"
     };
-    static const char *const kLabels[] = {
-      "Turn Right",   "Turn Left",    "Slight Right", "Slight Left",
-      "Sharp Right",  "Sharp Left",   "U-Turn",       "Roundabout",
-      "Merge",        "Straight",     "Destination"
+    static const char *const kDistances[] = {
+      "10.3 km",      "200 m",        "4.2 km",       "0.3 km",
+      "0.3 km",       "0.3 km",       "0.3 km",       "0.3 km",
+      "0.3 km",       "0.3 km",       "0 m"
+    };
+    static const char *const kStreets[] = {
+      "Osmeña Blvd",  "San Vicente St.", "San Vicente St.", "San Vicente St.",
+      "San Vicente St.", "San Vicente St.", "San Vicente St.", "San Vicente St.",
+      "San Vicente St.", "San Vicente St.", "Destination ahead"
+    };
+    static const uint8_t kPcts[] = {
+      90,             35,             20,             50,
+      50,             50,             50,             50,
+      50,             50,             0
     };
     static uint8_t s_testIdx = 0;
     const uint8_t idx = s_testIdx;
     s_testIdx = (s_testIdx + 1) % 11;
 
-    // Randomize distance between 10 m and 5000 m (5.0 km):
-    // Half the time pick 10 m .. 990 m (in 10 m steps) so < 50 m and meter steps are easy to see,
-    // half the time pick 1.0 km .. 5.0 km (in 0.1 km / 100 m steps).
-    uint32_t r = esp_random();
-    String distStr;
-    if (r & 1) {
-      int meters = (int)((r >> 1) % 99) * 10 + 10; // 10 m .. 990 m
-      distStr = String(meters) + " m";
-    } else {
-      int tenthsKm = (int)((r >> 1) % 41) + 10;    // 10 .. 50 -> 1.0 km .. 5.0 km
-      distStr = String(tenthsKm / 10) + "." + String(tenthsKm % 10) + " km";
-    }
-
     g_sub50Active   = false;
     g_sub50Done     = false;
     g_sub50Hold10At = 0;
-    payload = String(kManeuvers[idx]) + "|" + distStr + "|" + String(kLabels[idx]);
+    payload = String(kManeuvers[idx]) + "|" + String(kDistances[idx]) + "|" +
+              String(kStreets[idx]) + "|" + String(kPcts[idx]);
   } else {
     if (payload == g_lastPayload) return;
   }
@@ -271,12 +272,21 @@ void applyPayload(const String &rawPayload) {
 
   int p1 = payload.indexOf('|');
   int p2 = (p1 >= 0) ? payload.indexOf('|', p1 + 1) : -1;
+  int p3 = (p2 >= 0) ? payload.indexOf('|', p2 + 1) : -1;
 
   String m, d, s;
+  float explicitPct = -1.0f;
   if (p1 >= 0) {
     m = payload.substring(0, p1);
     d = (p2 >= 0) ? payload.substring(p1 + 1, p2) : payload.substring(p1 + 1);
-    s = (p2 >= 0) ? payload.substring(p2 + 1) : "";
+    s = (p2 >= 0) ? ((p3 >= 0) ? payload.substring(p2 + 1, p3) : payload.substring(p2 + 1)) : "";
+    if (p3 >= 0) {
+      String pStr = payload.substring(p3 + 1);
+      pStr.trim();
+      if (pStr.length() > 0) {
+        explicitPct = constrain(pStr.toFloat() / 100.0f, 0.0f, 1.0f);
+      }
+    }
   }
   m.trim(); d.trim(); s.trim();
   if (m == "arrived") m = "arrive";
@@ -376,6 +386,21 @@ void applyPayload(const String &rawPayload) {
     }
   }
 
+  float oldProgress = g_navProgress;
+  if (explicitPct >= 0.0f) {
+    g_navProgress = explicitPct;
+  } else {
+    // Adaptive leg tracking: record maximum distance observed for current turn/street leg
+    if (m != g_maneuver || s != g_street || curMeters > g_maxLegMeters || g_maxLegMeters <= 0) {
+      g_maxLegMeters = (curMeters > 0) ? curMeters : 100;
+    }
+    if (curMeters >= 0 && g_maxLegMeters > 0) {
+      g_navProgress = constrain((float)curMeters / (float)g_maxLegMeters, 0.0f, 1.0f);
+    } else if (curMeters == 0 || m == "arrive") {
+      g_navProgress = 0.0f;
+    }
+  }
+
   bool wasNav = g_maneuver.length() > 0 &&
                 g_maneuver != "clear" && g_maneuver != "end";
   bool isNav  = m.length() > 0 && m != "clear" && m != "end";
@@ -387,12 +412,15 @@ void applyPayload(const String &rawPayload) {
     g_sub50Active    = false;
     g_sub50Done      = false;
     g_sub50Hold10At  = 0;
+    g_navProgress    = 0.0f;
+    g_maxLegMeters   = -1;
   }
-  if (isNav) g_navEnded = false;
-
   if (m != g_maneuver) g_dirtyIcon   = true;
-  if (d != g_distance) g_dirtyDist   = true;
+  if (d != g_distance || fabsf(g_navProgress - oldProgress) > 0.005f) g_dirtyDist = true;
   if (s != g_street)   g_dirtyStreet = true;
+  if (m == "arrive" || g_maneuver == "arrive" || d == "Arrived" || g_distance == "Arrived") {
+    g_dirtyAll = true;
+  }
   g_maneuver = m; g_distance = d; g_street = s;
 
   if (wasNav != isNav) g_dirtyAll = true;
@@ -402,10 +430,13 @@ void applyPayload(const String &rawPayload) {
     g_sub50Active    = false;
     g_sub50Done      = false;
     g_sub50Hold10At  = 0;
+    g_navProgress    = 0.0f;
+    g_maxLegMeters   = -1;
   }
 
-  Serial.printf("[NAV] raw='%s' -> m='%s' d='%s' s='%s'\n",
-                payload.c_str(), g_maneuver.c_str(), g_distance.c_str(), g_street.c_str());
+  Serial.printf("[NAV] raw='%s' -> m='%s' d='%s' (%.0f%%) s='%s'\n",
+                payload.c_str(), g_maneuver.c_str(), g_distance.c_str(),
+                g_navProgress * 100.0f, g_street.c_str());
 }
 
 // ===================== BLE GATT Callbacks =====================

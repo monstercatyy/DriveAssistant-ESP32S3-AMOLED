@@ -10,24 +10,37 @@
 
 #include <math.h>
 #include "screen_nav.h"
+#include "bitmaps/nav_arrows.h"
 #include "../device_common.h"
 
 // ===================== Navigation Layout Geometry (368x448) =====================
-#define ICON_CX         CX
-#define ICON_CY         135
+// Circular distance bar gauge (270° arc centered at y = 178)
+#define GAUGE_CX        CX             // 184
+#define GAUGE_CY        178            // Matches Figma arc center
+#define GAUGE_R_OUTER   163            // Outer radius
+#define GAUGE_R_INNER   158            // Inner radius (thickness = 5px, center R = 160.5)
+#define GAUGE_START_DEG 135.0f         // Bottom-left opening (135°)
+#define GAUGE_END_DEG   45.0f          // Bottom-right opening (45°)
+#define GAUGE_SPAN_DEG  270.0f         // Sweep angle across top
+
+// Maneuver icon & dashed stem
+#define ICON_CX         CX             // 184
+#define ICON_CY         135            // Center of maneuver vector arrow
 #define ICON_AREA_X     84
 #define ICON_AREA_Y     35
 #define ICON_AREA_W     200
-#define ICON_AREA_H     200
+#define ICON_AREA_H     265            // Encompasses icon and dashed stem (y = 35 to 300)
 
-#define DIST_CY         282
-#define DIST_RECT_Y     246
-#define DIST_RECT_H     70
+// Text regions (opening at bottom)
+#define STREET_CY       318            // Street name center Y
+#define STREET_RECT_Y   304
+#define STREET_RECT_H   30
+#define STREET_MAX_W    330
 
-#define STREET_CY       358
-#define STREET_RECT_Y   330
-#define STREET_RECT_H   52
-#define STREET_MAX_W    310
+#define DIST_NUM_CY     370            // Distance number center Y (large 24pt bold)
+#define DIST_UNIT_CY    422            // Distance unit center Y (12pt bold)
+#define DIST_RECT_Y     336
+#define DIST_RECT_H     108
 
 // ===================== Waiting Screen Spinner Constants =====================
 #define SPIN_R          150     // Spinner radius for 368x448 display
@@ -141,104 +154,105 @@ static void renderIconCanvas() {
   }
 }
 
-// ===================== Vector Maneuver Arrow Primitives =====================
-static void rotatePt(int16_t cx0, int16_t cy0, float x, float y, float rad,
-                     int16_t &ox, int16_t &oy) {
-  float c = cosf(rad), s = sinf(rad);
-  ox = (int16_t)lroundf(cx0 + (x * c - y * s));
-  oy = (int16_t)lroundf(cy0 + (x * s + y * c));
+// ===================== Anti-Aliased Maneuver Bitmap Renderer =====================
+static void drawManeuverBitmap(const String &m, uint16_t color) {
+  const NavManeuverBitmap *bm = getNavManeuverBitmap(m);
+  if (!bm) return;
+
+  // 1. Direct 16-bit RGB565 bitmap (e.g. arrive destination pin with ground ring)
+  if (bm->rgb565) {
+    gfx->draw16bitRGBBitmap(bm->x, bm->y, (uint16_t *)bm->rgb565, bm->w, bm->h);
+    return;
+  }
+
+  // 2. Anti-aliased 8-bit Alpha Mask with dynamic tinting
+  if (!bm->alpha) return;
+
+  const int16_t w  = bm->w;
+  const int16_t h  = bm->h;
+  const int16_t x0 = bm->x;
+  const int16_t y0 = bm->y;
+
+  // Arrow accent color components
+  const uint32_t cr = (color >> 11) & 0x1F;
+  const uint32_t cg = (color >> 5) & 0x3F;
+  const uint32_t cb = color & 0x1F;
+
+  // Dashed stem fixed 15% white color components (COL_DASH = 0x2965)
+  const uint32_t dr = (COL_DASH >> 11) & 0x1F;
+  const uint32_t dg = (COL_DASH >> 5) & 0x3F;
+  const uint32_t db = COL_DASH & 0x1F;
+
+  // Render in 16-line DMA chunks (w <= 180, so 180 * 16 * 2 = 5,760 bytes)
+  #define CHUNK_LINES 16
+  static uint16_t s_chunkBuf[180 * CHUNK_LINES];
+
+  for (int16_t y = 0; y < h; y += CHUNK_LINES) {
+    int16_t lines = (h - y < CHUNK_LINES) ? (h - y) : CHUNK_LINES;
+    for (int16_t row = 0; row < lines; row++) {
+      int16_t screenY = y0 + y + row;
+      const uint8_t *srcRow = &bm->alpha[(y + row) * w];
+      uint16_t *dstRow = &s_chunkBuf[row * w];
+
+      for (int16_t col = 0; col < w; col++) {
+        uint8_t a = srcRow[col];
+        if (a == 0) {
+          dstRow[col] = COL_BG;
+        } else if (a <= 45 && screenY >= 205) {
+          // Authentic Figma dashed stem (15% white, independent of arrow color)
+          uint16_t scale = (uint16_t)a * 255 / 38;
+          if (scale > 255) scale = 255;
+          uint32_t r = (dr * scale + 128) >> 8;
+          uint32_t g = (dg * scale + 128) >> 8;
+          uint32_t b = (db * scale + 128) >> 8;
+          dstRow[col] = (r << 11) | (g << 5) | b;
+        } else {
+          // Maneuver arrow body with dynamic color tinting & anti-aliasing
+          uint32_t r = (cr * a + 128) >> 8;
+          uint32_t g = (cg * a + 128) >> 8;
+          uint32_t b = (cb * a + 128) >> 8;
+          dstRow[col] = (r << 11) | (g << 5) | b;
+        }
+      }
+    }
+    gfx->draw16bitRGBBitmap(x0, y0 + y, s_chunkBuf, w, lines);
+  }
 }
 
-// Draws a thick rounded-cap road segment from (x0, y0) to (x1, y1)
-static void fillThickSeg(int16_t x0, int16_t y0, int16_t x1, int16_t y1,
-                         int16_t r, uint16_t color) {
-  gfx->fillCircle(x0, y0, r, color);
-  gfx->fillCircle(x1, y1, r, color);
-  float dx = (float)(x1 - x0), dy = (float)(y1 - y0);
-  float len = sqrtf(dx * dx + dy * dy);
-  if (len < 1.0f) return;
-  float nx = -dy / len * r, ny = dx / len * r;
-  int16_t ax = (int16_t)lroundf(x0 + nx), ay = (int16_t)lroundf(y0 + ny);
-  int16_t bx = (int16_t)lroundf(x0 - nx), by = (int16_t)lroundf(y0 - ny);
-  int16_t cx = (int16_t)lroundf(x1 - nx), cy = (int16_t)lroundf(y1 - ny);
-  int16_t dx_ = (int16_t)lroundf(x1 + nx), dy_ = (int16_t)lroundf(y1 + ny);
-  gfx->fillTriangle(ax, ay, bx, by, cx, cy, color);
-  gfx->fillTriangle(ax, ay, cx, cy, dx_, dy_, color);
-}
+// Renders the 270° circular Distance Bar (0-100% distance to maneuver)
+static void drawDistanceBar() {
+  // Completely remove distance arc bars on arrival or ended screens
+  if (g_maneuver == "arrive" || g_distance == "Arrived" || g_navEnded) {
+    return;
+  }
 
-// Draws a bold triangular arrowhead with its tip at (tipX, tipY)
-static void drawArrowHead(int16_t tipX, int16_t tipY, float angleDeg,
-                          float size, uint16_t color) {
-  float rad = angleDeg * PI / 180.0f;
-  int16_t ax, ay, bx, by, cx, cy;
-  rotatePt(tipX, tipY, 0,             0,    rad, ax, ay);
-  rotatePt(tipX, tipY, -size * 0.85f, size, rad, bx, by);
-  rotatePt(tipX, tipY,  size * 0.85f, size, rad, cx, cy);
-  gfx->fillTriangle(ax, ay, bx, by, cx, cy, color);
-}
+  // 1. Draw inactive background track (full 270° arc from 135° to 45° across top)
+  gfx->fillArc(GAUGE_CX, GAUGE_CY, GAUGE_R_OUTER, GAUGE_R_INNER,
+               GAUGE_START_DEG, GAUGE_END_DEG, COL_GAUGE_BG);
 
-static void drawArrive(int16_t cx0, int16_t cy0, uint16_t color) {
-  // Ground target ring beneath pin tip
-  gfx->fillCircle(cx0, cy0 + 68, 26, 0x1B45);
-  gfx->fillCircle(cx0, cy0 + 68, 13, COL_BG);
-  // Map pin head + tapered teardrop point
-  gfx->fillCircle(cx0, cy0 - 20, 46, color);
-  gfx->fillTriangle(cx0 - 42, cy0 - 2, cx0 + 42, cy0 - 2, cx0, cy0 + 66, color);
-  // Inner pin cutout
-  gfx->fillCircle(cx0, cy0 - 20, 18, COL_BG);
-}
+  // 2. Draw active progress bar (from 135° clockwise by g_navProgress * 270°)
+  float p = constrain(g_navProgress, 0.0f, 1.0f);
+  if (p > 0.005f) {
+    if (p >= 0.995f) {
+      gfx->fillArc(GAUGE_CX, GAUGE_CY, GAUGE_R_OUTER, GAUGE_R_INNER,
+                   GAUGE_START_DEG, GAUGE_END_DEG, COL_GAUGE_FG);
+    } else {
+      float endDeg = fmodf(GAUGE_START_DEG + p * GAUGE_SPAN_DEG, 360.0f);
+      gfx->fillArc(GAUGE_CX, GAUGE_CY, GAUGE_R_OUTER, GAUGE_R_INNER,
+                   GAUGE_START_DEG, endDeg, COL_GAUGE_FG);
 
-static void drawRoundabout(int16_t cx0, int16_t cy0, uint16_t color) {
-  fillThickSeg(cx0 - 12, cy0 + 82, cx0 - 12, cy0 + 42, 12, color);
-  gfx->fillCircle(cx0 - 12, cy0 + 8, 44, color);
-  gfx->fillCircle(cx0 - 12, cy0 + 8, 22, COL_BG);
-  fillThickSeg(cx0 + 16, cy0 - 16, cx0 + 54, cy0 - 50, 12, color);
-  drawArrowHead(cx0 + 82, cy0 - 74, 48.0f, 44.0f, color);
-}
+      // Rounded tip cap on active end
+      float rad = endDeg * DEG_TO_RAD;
+      int16_t capX = GAUGE_CX + (int16_t)roundf(160.5f * cosf(rad));
+      int16_t capY = GAUGE_CY + (int16_t)roundf(160.5f * sinf(rad));
+      gfx->fillCircle(capX, capY, 2, COL_GAUGE_FG);
+    }
 
-// Renders crisp 200x200 Google Maps-style bent maneuver arrows
-static void drawManeuverVector(int16_t cx0, int16_t cy0, const String &m, uint16_t color) {
-  const int16_t R = 14;   // 28px road stem thickness
-  const float   H = 52.0f; // Arrowhead size
-
-  if (m == "roundabout") {
-    drawRoundabout(cx0, cy0, color);
-  } else if (m == "arrive") {
-    drawArrive(cx0, cy0, color);
-  } else if (m == "turn-right" || m == "right") {
-    fillThickSeg(cx0 - 28, cy0 + 80, cx0 - 28, cy0 - 18, R, color);
-    fillThickSeg(cx0 - 28, cy0 - 18, cx0 + 38, cy0 - 18, R, color);
-    drawArrowHead(cx0 + 84, cy0 - 18, 90.0f, H, color);
-  } else if (m == "turn-left" || m == "left") {
-    fillThickSeg(cx0 + 28, cy0 + 80, cx0 + 28, cy0 - 18, R, color);
-    fillThickSeg(cx0 + 28, cy0 - 18, cx0 - 38, cy0 - 18, R, color);
-    drawArrowHead(cx0 - 84, cy0 - 18, -90.0f, H, color);
-  } else if (m == "slight-right" || m == "keep-right" || m == "merge") {
-    fillThickSeg(cx0 - 22, cy0 + 80, cx0 - 22, cy0 + 6, R, color);
-    fillThickSeg(cx0 - 22, cy0 + 6,  cx0 + 32, cy0 - 48, R, color);
-    drawArrowHead(cx0 + 66, cy0 - 82, 45.0f, H, color);
-  } else if (m == "slight-left" || m == "keep-left") {
-    fillThickSeg(cx0 + 22, cy0 + 80, cx0 + 22, cy0 + 6, R, color);
-    fillThickSeg(cx0 + 22, cy0 + 6,  cx0 - 32, cy0 - 48, R, color);
-    drawArrowHead(cx0 - 66, cy0 - 82, -45.0f, H, color);
-  } else if (m == "sharp-right") {
-    fillThickSeg(cx0 - 30, cy0 + 76, cx0 - 30, cy0 - 46, R, color);
-    fillThickSeg(cx0 - 30, cy0 - 46, cx0 + 28, cy0 + 12, R, color);
-    drawArrowHead(cx0 + 62, cy0 + 46, 135.0f, H, color);
-  } else if (m == "sharp-left") {
-    fillThickSeg(cx0 + 30, cy0 + 76, cx0 + 30, cy0 - 46, R, color);
-    fillThickSeg(cx0 + 30, cy0 - 46, cx0 - 28, cy0 + 12, R, color);
-    drawArrowHead(cx0 - 62, cy0 + 46, -135.0f, H, color);
-  } else if (m == "uturn" || m == "u-turn") {
-    fillThickSeg(cx0 + 36, cy0 + 80, cx0 + 36, cy0 - 28, 13, color);
-    fillThickSeg(cx0 + 36, cy0 - 28, cx0 + 14, cy0 - 56, 13, color);
-    fillThickSeg(cx0 + 14, cy0 - 56, cx0 - 14, cy0 - 56, 13, color);
-    fillThickSeg(cx0 - 14, cy0 - 56, cx0 - 36, cy0 - 28, 13, color);
-    fillThickSeg(cx0 - 36, cy0 - 28, cx0 - 36, cy0 + 20, 13, color);
-    drawArrowHead(cx0 - 36, cy0 + 68, 180.0f, 48.0f, color);
-  } else {
-    fillThickSeg(cx0, cy0 + 80, cx0, cy0 - 36, R, color);
-    drawArrowHead(cx0, cy0 - 86, 0.0f, H, color);
+    // Rounded start cap on 135° end
+    float sRad = GAUGE_START_DEG * DEG_TO_RAD;
+    int16_t sX = GAUGE_CX + (int16_t)roundf(160.5f * cosf(sRad));
+    int16_t sY = GAUGE_CY + (int16_t)roundf(160.5f * sinf(sRad));
+    gfx->fillCircle(sX, sY, 2, COL_GAUGE_FG);
   }
 }
 
@@ -246,12 +260,7 @@ static void drawManeuverVector(int16_t cx0, int16_t cy0, const String &m, uint16
 static void drawIconRegion() {
   if (g_maneuver == "unknown" && g_iconValid && g_iconCanvas) {
     const int16_t x0 = ICON_CX - OUT_ICON_W / 2, y0 = ICON_CY - OUT_ICON_H / 2;
-    gfx->fillRect(ICON_AREA_X, ICON_AREA_Y, x0 - ICON_AREA_X, ICON_AREA_H, COL_BG);
-    gfx->fillRect(x0 + OUT_ICON_W, ICON_AREA_Y,
-                  ICON_AREA_X + ICON_AREA_W - (x0 + OUT_ICON_W), ICON_AREA_H, COL_BG);
-    gfx->fillRect(x0, ICON_AREA_Y, OUT_ICON_W, y0 - ICON_AREA_Y, COL_BG);
-    gfx->fillRect(x0, y0 + OUT_ICON_H, OUT_ICON_W,
-                  ICON_AREA_Y + ICON_AREA_H - (y0 + OUT_ICON_H), COL_BG);
+    gfx->fillRect(ICON_AREA_X, ICON_AREA_Y, ICON_AREA_W, ICON_AREA_H, COL_BG);
     scale3xIcon();
     renderIconCanvas();
     gfx->draw16bitRGBBitmap(x0, y0, g_iconCanvas, OUT_ICON_W, OUT_ICON_H);
@@ -259,40 +268,75 @@ static void drawIconRegion() {
   }
 
   gfx->fillRect(ICON_AREA_X, ICON_AREA_Y, ICON_AREA_W, ICON_AREA_H, COL_BG);
-  drawManeuverVector(ICON_CX, ICON_CY, g_maneuver, g_colNavArrow);
+  drawManeuverBitmap(g_maneuver, g_colNavArrow);
 }
 
 static void drawDistRegion() {
-  gfx->fillRect(20, DIST_RECT_Y, SCREEN_W - 40, DIST_RECT_H, COL_BG);
-  if (g_distance.length()) {
-    drawTextC(g_distance, DIST_CY, &FreeSansBold24pt7b, g_colNavDist);
+  gfx->fillRect(10, DIST_RECT_Y, SCREEN_W - 20, DIST_RECT_H, COL_BG);
+  if (!g_distance.length()) return;
+
+  if (g_maneuver == "arrive" || g_distance == "Arrived") {
+    if (g_distance == "0 m") {
+      drawTextC("0 m", DIST_NUM_CY, &SFCompactBold24pt7b, 0x07E8 /* green */);
+      drawTextC((g_street.length() > 0) ? fitStreet(g_street, &SFCompactBold12pt7b, STREET_MAX_W) : "Destination ahead",
+                DIST_UNIT_CY, &SFCompactBold12pt7b, 0xFFFF /* white */);
+    } else {
+      drawTextC("Arrived", DIST_NUM_CY, &SFCompactBold24pt7b, 0x07E8 /* green */);
+      drawTextC((g_street.length() > 0) ? fitStreet(g_street, &SFCompactBold12pt7b, STREET_MAX_W) : "Destination",
+                DIST_UNIT_CY, &SFCompactBold12pt7b, 0xFFFF /* white */);
+    }
+    return;
+  }
+
+  // Split into distance number and distance unit (e.g. "50 m" -> "50", "m")
+  String num, unit;
+  int spaceIdx = g_distance.lastIndexOf(' ');
+  if (spaceIdx > 0) {
+    num  = g_distance.substring(0, spaceIdx);
+    unit = g_distance.substring(spaceIdx + 1);
+  } else {
+    num  = g_distance;
+    unit = "";
+  }
+
+  // Draw giant distance number in SF Compact Bold 48pt (or 24pt if > 4 chars)
+  if (num.length() <= 4) {
+    drawTextC(num, DIST_NUM_CY, &SFCompactBold48pt7b, g_colNavDist);
+  } else {
+    drawTextC(num, DIST_NUM_CY, &SFCompactBold24pt7b, g_colNavDist);
+  }
+
+  // Draw unit centered below number at DIST_UNIT_CY in SF Compact Bold 12pt
+  if (unit.length() > 0) {
+    drawTextC(unit, DIST_UNIT_CY, &SFCompactBold12pt7b, COL_DIM_WHITE);
   }
 }
 
 static void drawStreetRegion() {
-  gfx->fillRect(20, STREET_RECT_Y, SCREEN_W - 40, STREET_RECT_H, COL_BG);
-  if (g_street.length())
-    drawTextC(fitStreet(g_street, &FreeSansBold12pt7b, STREET_MAX_W),
-              STREET_CY, &FreeSansBold12pt7b, 0xFFFF);
+  gfx->fillRect(10, STREET_RECT_Y, SCREEN_W - 20, STREET_RECT_H, COL_BG);
+  if (g_street.length() && g_maneuver != "arrive" && g_distance != "Arrived") {
+    drawTextC(fitStreet(g_street, &SFCompactBold12pt7b, STREET_MAX_W),
+              STREET_CY, &SFCompactBold12pt7b, COL_DIM_WHITE);
+  }
 }
 
 // ===================== Waiting & Ended Screens =====================
 static void drawWaiting() {
   gfx->fillScreen(COL_BG);
   if (g_connected) {
-    drawTextC("CONNECTED", CY - 16, &FreeSansBold12pt7b, 0xFFFF);
-    drawTextC("WAITING",   CY + 20, &FreeSansBold12pt7b, 0x8410);
+    drawTextC("CONNECTED", CY - 16, &SFCompactBold12pt7b, 0xFFFF);
+    drawTextC("WAITING",   CY + 20, &SFCompactBold12pt7b, 0x8410);
   } else {
-    drawTextC("NO PHONE",  CY - 16, &FreeSansBold12pt7b, 0xFFFF);
-    drawTextC("WAITING",   CY + 20, &FreeSansBold12pt7b, 0x8410);
+    drawTextC("NO PHONE",  CY - 16, &SFCompactBold12pt7b, 0xFFFF);
+    drawTextC("WAITING",   CY + 20, &SFCompactBold12pt7b, 0x8410);
   }
 }
 
 static void drawEnded() {
   gfx->fillScreen(COL_BG);
-  drawArrive(ICON_CX, ICON_CY, g_colNavArrow);
-  drawTextC("Arrived", DIST_CY, &FreeSansBold24pt7b, g_colNavDist);
-  drawTextC("Navigation ended", STREET_CY, &FreeSansBold12pt7b, 0xFFFF);
+  drawManeuverBitmap("arrive", 0x07E8);
+  drawTextC("Arrived", DIST_NUM_CY, &SFCompactBold24pt7b, 0x07E8);
+  drawTextC("Navigation ended", DIST_UNIT_CY, &SFCompactBold12pt7b, 0xFFFF);
 }
 
 // ===================== Public Component Entry Points =====================
@@ -306,13 +350,17 @@ void screen_nav_draw() {
     g_navShown = false;
   } else if (g_dirtyAll || !g_navShown) {
     gfx->fillScreen(COL_BG);
+    drawDistanceBar();
     drawIconRegion();
     drawDistRegion();
     drawStreetRegion();
     g_navShown = true;
   } else {
     if (g_dirtyIcon)   drawIconRegion();
-    if (g_dirtyDist)   drawDistRegion();
+    if (g_dirtyDist) {
+      drawDistanceBar();
+      drawDistRegion();
+    }
     if (g_dirtyStreet) drawStreetRegion();
   }
 }

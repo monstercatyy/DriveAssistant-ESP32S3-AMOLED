@@ -13,6 +13,8 @@ uint8_t  g_screen      = SCR_MAIN;
 String   g_maneuver    = "";
 String   g_distance    = "";
 String   g_street      = "";
+float    g_navProgress = 0.0f;
+int      g_maxLegMeters = -1;
 bool     g_navEnded    = false;
 bool     g_navShown    = false;
 uint8_t  g_iconBits[ICON_W * ICON_H / 8];
