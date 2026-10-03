@@ -98,7 +98,7 @@ static void dismissNavToHome(const char *reason) {
   g_arrivedDismissed = true;
   g_screen           = SCR_MAIN;
   g_dirtyAll         = true;
-  Serial.printf("[UI] Returned to Waiting for Google Maps (%s)\n", reason);
+  Serial.printf("[UI] Returned to Waiting screen (%s)\n", reason);
 }
 
 // ===================== Screen Dispatcher =====================
@@ -157,26 +157,26 @@ static String inferManeuverFromText(const String &text) {
   // is not misclassified as a right/left turn!
   if (t.indexOf("destination") >= 0 || t.indexOf("you have arrived") >= 0 ||
       t.indexOf("you've arrived") >= 0 || t.indexOf("arrived") >= 0 ||
-      t.indexOf("ziel") >= 0 || t.indexOf("angekommen") >= 0 ||
+      t.indexOf("ziel") >= 0 || t.indexOf("angekommen") >= 0 || t.indexOf("erreicht") >= 0 ||
       t == "the right" || t == "the left" ||
       t.startsWith("the right ") || t.startsWith("the left "))
     return "arrive";
   if (t.indexOf("roundabout") >= 0 || t.indexOf("kreisverkehr") >= 0 || t.indexOf("exit") >= 0)
     return "roundabout";
-  if (t.indexOf("u-turn") >= 0 || t.indexOf("uturn") >= 0 || t.indexOf("wenden") >= 0)
+  if (t.indexOf("u-turn") >= 0 || t.indexOf("uturn") >= 0 || t.indexOf("wenden") >= 0 || t.indexOf("kehrt") >= 0)
     return "uturn";
   if (t.indexOf("sharp right") >= 0 || t.indexOf("scharf rechts") >= 0)
     return "sharp-right";
   if (t.indexOf("sharp left") >= 0 || t.indexOf("scharf links") >= 0)
     return "sharp-left";
-  if (t.indexOf("slight right") >= 0 || t.indexOf("keep right") >= 0 || t.indexOf("halb rechts") >= 0)
+  if (t.indexOf("slight right") >= 0 || t.indexOf("keep right") >= 0 || t.indexOf("halb rechts") >= 0 || t.indexOf("bear right") >= 0)
     return "slight-right";
-  if (t.indexOf("slight left") >= 0 || t.indexOf("keep left") >= 0 || t.indexOf("halb links") >= 0)
+  if (t.indexOf("slight left") >= 0 || t.indexOf("keep left") >= 0 || t.indexOf("halb links") >= 0 || t.indexOf("bear left") >= 0)
     return "slight-left";
   if (t.indexOf("right") >= 0 || t.indexOf("rechts") >= 0)
-    return "right";
+    return "turn-right";
   if (t.indexOf("left") >= 0 || t.indexOf("links") >= 0)
-    return "left";
+    return "turn-left";
   if (t.indexOf("merge") >= 0 || t.indexOf("einordnen") >= 0)
     return "merge";
   return "straight";

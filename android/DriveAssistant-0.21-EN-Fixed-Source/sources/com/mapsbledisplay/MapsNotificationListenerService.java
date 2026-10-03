@@ -41,7 +41,16 @@ public final class MapsNotificationListenerService extends NotificationListenerS
     private static final String END_PAYLOAD = "end||";
     private static final int ICON_SIZE = 40;
     private static final String MAPS_PKG = "com.google.android.apps.maps";
+    public static final String KOMOOT_PKG = "de.komoot.android";
+    public static final String OSMAND_PREFIX = "net.osmand";
     private static final long NAV_END_DELAY_MS = 15000;
+
+    public static final boolean isNavPackage(String pkg) {
+        if (pkg == null) {
+            return false;
+        }
+        return pkg.equals(MAPS_PKG) || pkg.equals(KOMOOT_PKG) || pkg.startsWith(OSMAND_PREFIX);
+    }
     private static final String TAG = "MapsListener";
     private int lastIconHash;
     private String lastSentPayload;
@@ -114,7 +123,7 @@ public final class MapsNotificationListenerService extends NotificationListenerS
             if (remoteViews == null) {
                 return str;
             }
-            Context createPackageContext = createPackageContext(MAPS_PKG, 0);
+            Context createPackageContext = createPackageContext(statusBarNotification.getPackageName(), 0);
             createPackageContext.setTheme(createPackageContext.getApplicationInfo().theme);
             View apply = remoteViews.apply(createPackageContext, new FrameLayout(createPackageContext));
             StringBuilder sb = new StringBuilder();
@@ -232,7 +241,7 @@ public final class MapsNotificationListenerService extends NotificationListenerS
 
     @Override // android.service.notification.NotificationListenerService
     public void onNotificationPosted(StatusBarNotification sbn) {
-        if (sbn != null && Intrinsics.areEqual(sbn.getPackageName(), MAPS_PKG)) {
+        if (sbn != null && isNavPackage(sbn.getPackageName())) {
             Bundle bundle = sbn.getNotification().extras;
             CharSequence charSequence = bundle.getCharSequence(NotificationCompat.EXTRA_TITLE);
             String obj = charSequence != null ? charSequence.toString() : null;
@@ -269,7 +278,10 @@ public final class MapsNotificationListenerService extends NotificationListenerS
     private final void sendManeuverIcon(StatusBarNotification sbn) {
         Icon largeIcon = sbn.getNotification().getLargeIcon();
         if (largeIcon == null) {
-            Log.d(TAG, "kein largeIcon in der Benachrichtigung");
+            largeIcon = sbn.getNotification().getSmallIcon();
+        }
+        if (largeIcon == null) {
+            Log.d(TAG, "kein Icon in der Benachrichtigung");
             return;
         }
         Drawable loadDrawable = largeIcon.loadDrawable(this);
@@ -311,8 +323,8 @@ public final class MapsNotificationListenerService extends NotificationListenerS
 
     @Override // android.service.notification.NotificationListenerService
     public void onNotificationRemoved(StatusBarNotification sbn) {
-        if (Intrinsics.areEqual(sbn != null ? sbn.getPackageName() : null, MAPS_PKG)) {
-            Log.d(TAG, "Maps-Notification entfernt (Ende-Timer laeuft)");
+        if (sbn != null && isNavPackage(sbn.getPackageName())) {
+            Log.d(TAG, "Nav-Notification entfernt (Ende-Timer laeuft)");
             String str = this.lastSentPayload;
             if (str == null || Intrinsics.areEqual(str, END_PAYLOAD)) {
                 return;
@@ -341,7 +353,7 @@ public final class MapsNotificationListenerService extends NotificationListenerS
             if (activeNotifications != null) {
                 ArrayList arrayList = new ArrayList();
                 for (StatusBarNotification statusBarNotification : activeNotifications) {
-                    if (Intrinsics.areEqual(statusBarNotification.getPackageName(), MAPS_PKG)) {
+                    if (isNavPackage(statusBarNotification.getPackageName())) {
                         arrayList.add(statusBarNotification);
                     }
                 }
