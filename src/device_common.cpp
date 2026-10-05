@@ -9,24 +9,30 @@ AppConfig g_config = { 200, 600 };   // Default brightness 200, 10-minute idle t
 
 static unsigned long s_last_act_ms = 0;
 static bool          s_pwr_short_pending = false;
+static bool          s_pwr_long_pending  = false;
 
 void common_init()
 {
     power.enableBattDetection();
     power.enableBattVoltageMeasure();
 
-    // Configure physical PWR button IRQ:
-    //  - Short press: 128 ms threshold (toggles screen on/off in app loop)
-    //  - Long press:  1.5 s threshold (clean PMU power-off)
-    power.setPowerKeyPressOnTime(XPOWERS_POWERON_128MS);
+    // Configure physical PWR button:
+    //  - Power-ON press threshold: 1 Second (avoids auto-turn-on upon releasing long-press)
+    //  - Power-OFF hardware threshold: 4 Seconds
+    //  - Long-press IRQ time: 1.5 Seconds
+    //  - Set hardware long press behavior to POWER OFF (not restart!)
+    power.setPowerKeyPressOnTime(XPOWERS_POWERON_1S);
     power.setPowerKeyPressOffTime(XPOWERS_POWEROFF_4S);
     power.setIrqLevelTime(XPOWERS_AXP2101_IRQ_TIME_1S5);
+    power.setLongPressPowerOFF();
+    power.enableLongPressShutdown();
     power.disableIRQ(XPOWERS_AXP2101_ALL_IRQ);
     power.clearIrqStatus();
     power.enableIRQ(XPOWERS_AXP2101_PKEY_LONG_IRQ |
                     XPOWERS_AXP2101_PKEY_SHORT_IRQ);
 
     s_pwr_short_pending = false;
+    s_pwr_long_pending  = false;
     s_last_act_ms = millis();
 }
 
@@ -47,16 +53,15 @@ void common_tick()
         s_pwr_short_pending = true;
     }
 
-    // Long-press PWR (>1.5 s) -> clean PMU shutdown
+    // Long-press PWR (>1.5 s) -> latch event so main loop can play shutdown animation
     if (pwr_long) {
-        power.clearIrqStatus();
-        power.shutdown();
+        s_pwr_long_pending = true;
     }
 
     // Optional idle timeout shutdown
     if (g_config.timeout_s > 0 &&
         (millis() - s_last_act_ms >= g_config.timeout_s * 1000UL)) {
-        power.shutdown();
+        s_pwr_long_pending = true;
     }
 }
 
@@ -64,6 +69,13 @@ bool common_consume_pwr_short()
 {
     bool v = s_pwr_short_pending;
     s_pwr_short_pending = false;
+    return v;
+}
+
+bool common_consume_pwr_long()
+{
+    bool v = s_pwr_long_pending;
+    s_pwr_long_pending = false;
     return v;
 }
 

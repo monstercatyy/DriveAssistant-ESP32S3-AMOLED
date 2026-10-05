@@ -180,7 +180,7 @@
     <string name="mtrl_switch_track_path">M0,16 A16,16 0 0,1 16,0 H36 A16,16 0 0,1 36,32 H16 A16,16 0 0,1 0,16</string>
     <string name="mtrl_timepicker_cancel">Cancel</string>
     <string name="mtrl_timepicker_confirm">OK</string>
-    <string name="notif_connected">Connected – waiting for navigation (Google Maps, Komoot, OsmAnd)</string>
+    <string name="notif_connected">Connected – waiting for navigation (Google Maps, Komoot, OsmAnd, Kurviger)</string>
     <string name="notif_connecting">Connecting…</string>
     <string name="notif_granted">Access granted, service running</string>
     <string name="notif_granted_not_bound">Access granted, the service is being restarted… If this message stays, allow autostart or switch access off and on again (see Help)</string>
@@ -241,7 +241,7 @@
     <string name="status_dot">●</string>
     <string name="step1">1. Allow notification access</string>
     <string name="step2">2. Connect Drive Assistant</string>
-    <string name="step3">3. Start navigation (Google Maps, Komoot, OsmAnd)</string>
+    <string name="step3">3. Start navigation (Google Maps, Komoot, OsmAnd, Kurviger)</string>
     <string name="test_sent">Test packet sent</string>
     <string name="title_setup">Setup</string>
 </resources>

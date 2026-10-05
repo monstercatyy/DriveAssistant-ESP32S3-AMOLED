@@ -226,33 +226,56 @@ static void drawDistanceBar() {
     return;
   }
 
+  uint16_t trackColor = blend565(g_colNavBar, COL_BG, 51);
+
   // 1. Draw inactive background track (full 270° arc from 135° to 45° across top)
   gfx->fillArc(GAUGE_CX, GAUGE_CY, GAUGE_R_OUTER, GAUGE_R_INNER,
-               GAUGE_START_DEG, GAUGE_END_DEG, COL_GAUGE_BG);
+               GAUGE_START_DEG, GAUGE_END_DEG, trackColor);
 
-  // 2. Draw active progress bar (from 135° clockwise by g_navProgress * 270°)
+  // 2. Draw active progress bar
   float p = constrain(g_navProgress, 0.0f, 1.0f);
   if (p > 0.005f) {
     if (p >= 0.995f) {
       gfx->fillArc(GAUGE_CX, GAUGE_CY, GAUGE_R_OUTER, GAUGE_R_INNER,
-                   GAUGE_START_DEG, GAUGE_END_DEG, COL_GAUGE_FG);
+                   GAUGE_START_DEG, GAUGE_END_DEG, g_colNavBar);
     } else {
-      float endDeg = fmodf(GAUGE_START_DEG + p * GAUGE_SPAN_DEG, 360.0f);
-      gfx->fillArc(GAUGE_CX, GAUGE_CY, GAUGE_R_OUTER, GAUGE_R_INNER,
-                   GAUGE_START_DEG, endDeg, COL_GAUGE_FG);
+      float span = p * GAUGE_SPAN_DEG;
+      if (g_barDir == 1) {
+        // Right > Left: fills from 45° (bottom-right) counter-clockwise across top
+        float startDeg = fmodf(GAUGE_END_DEG - span + 360.0f, 360.0f);
+        gfx->fillArc(GAUGE_CX, GAUGE_CY, GAUGE_R_OUTER, GAUGE_R_INNER,
+                     startDeg, GAUGE_END_DEG, g_colNavBar);
 
-      // Rounded tip cap on active end
-      float rad = endDeg * DEG_TO_RAD;
-      int16_t capX = GAUGE_CX + (int16_t)roundf(160.5f * cosf(rad));
-      int16_t capY = GAUGE_CY + (int16_t)roundf(160.5f * sinf(rad));
-      gfx->fillCircle(capX, capY, 2, COL_GAUGE_FG);
+        // Rounded tip cap on active moving end
+        float rad = startDeg * DEG_TO_RAD;
+        int16_t capX = GAUGE_CX + (int16_t)roundf(160.5f * cosf(rad));
+        int16_t capY = GAUGE_CY + (int16_t)roundf(160.5f * sinf(rad));
+        gfx->fillCircle(capX, capY, 2, g_colNavBar);
+
+        // Rounded cap on fixed 45° right end
+        float eRad = GAUGE_END_DEG * DEG_TO_RAD;
+        int16_t eX = GAUGE_CX + (int16_t)roundf(160.5f * cosf(eRad));
+        int16_t eY = GAUGE_CY + (int16_t)roundf(160.5f * sinf(eRad));
+        gfx->fillCircle(eX, eY, 2, g_colNavBar);
+      } else {
+        // Left > Right (Default): fills from 135° (bottom-left) clockwise across top
+        float endDeg = fmodf(GAUGE_START_DEG + span, 360.0f);
+        gfx->fillArc(GAUGE_CX, GAUGE_CY, GAUGE_R_OUTER, GAUGE_R_INNER,
+                     GAUGE_START_DEG, endDeg, g_colNavBar);
+
+        // Rounded tip cap on active moving end
+        float rad = endDeg * DEG_TO_RAD;
+        int16_t capX = GAUGE_CX + (int16_t)roundf(160.5f * cosf(rad));
+        int16_t capY = GAUGE_CY + (int16_t)roundf(160.5f * sinf(rad));
+        gfx->fillCircle(capX, capY, 2, g_colNavBar);
+
+        // Rounded cap on fixed 135° left end
+        float sRad = GAUGE_START_DEG * DEG_TO_RAD;
+        int16_t sX = GAUGE_CX + (int16_t)roundf(160.5f * cosf(sRad));
+        int16_t sY = GAUGE_CY + (int16_t)roundf(160.5f * sinf(sRad));
+        gfx->fillCircle(sX, sY, 2, g_colNavBar);
+      }
     }
-
-    // Rounded start cap on 135° end
-    float sRad = GAUGE_START_DEG * DEG_TO_RAD;
-    int16_t sX = GAUGE_CX + (int16_t)roundf(160.5f * cosf(sRad));
-    int16_t sY = GAUGE_CY + (int16_t)roundf(160.5f * sinf(sRad));
-    gfx->fillCircle(sX, sY, 2, COL_GAUGE_FG);
   }
 }
 
@@ -350,15 +373,18 @@ void screen_nav_draw() {
     g_navShown = false;
   } else if (g_dirtyAll || !g_navShown) {
     gfx->fillScreen(COL_BG);
-    drawDistanceBar();
     drawIconRegion();
+    drawDistanceBar();
     drawDistRegion();
     drawStreetRegion();
     g_navShown = true;
   } else {
-    if (g_dirtyIcon)   drawIconRegion();
-    if (g_dirtyDist) {
+    if (g_dirtyIcon) {
+      drawIconRegion();
       drawDistanceBar();
+    }
+    if (g_dirtyDist) {
+      if (!g_dirtyIcon) drawDistanceBar();
       drawDistRegion();
     }
     if (g_dirtyStreet) drawStreetRegion();

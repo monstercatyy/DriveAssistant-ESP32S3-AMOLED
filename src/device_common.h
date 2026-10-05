@@ -28,5 +28,8 @@ void common_tick();
 // Consumes a single physical PWR button short-press event latched by common_tick()
 bool common_consume_pwr_short();
 
+// Consumes a physical PWR button long-press event latched by common_tick()
+bool common_consume_pwr_long();
+
 // Alpha-blends foreground RGB565 colour `fg` over background `bg` (alpha: 0..255)
 uint16_t blend565(uint16_t fg, uint16_t bg, uint8_t alpha);

@@ -36,9 +36,10 @@
 #define CMD_CHAR_UUID    "6e400005-b5a3-f393-e0a9-e50e24dcca9e"
 
 // ===================== Touch & Power Constants =====================
-#define XCA9554_ADDR     0x20
-#define SWIPE_MIN_PX     40
-#define LONGPRESS_MS     600
+#define XCA9554_ADDR       0x20
+#define SWIPE_MIN_PX       40
+#define SHUTDOWN_HOLD_MS   4000UL                   // 4.0s hold on display to shut down
+#define HOLD_INDICATOR_MS  1000UL                   // Show countdown ring after 1.0s
 #define SLEEP_TIMEOUT_MS   (10UL * 60UL * 1000UL)   // 10 min without BLE/motion/touch -> power off
 #define NAV_END_SHOW_MS    20000UL                  // Return to Waiting for Google Maps after 20 s
 #define ARRIVED_TIMEOUT_MS 20000UL                  // Auto-return to Waiting for Google Maps 20 s after Arrived
@@ -47,6 +48,7 @@ enum TouchEvent : uint8_t {
   TE_NONE = 0,
   TE_TAP,
   TE_LONG_PRESS,
+  TE_SHUTDOWN,
   TE_SWIPE_LEFT,
   TE_SWIPE_RIGHT,
   TE_SWIPE_UP,
@@ -57,6 +59,8 @@ enum TouchEvent : uint8_t {
 XPowersPMU power;
 uint16_t g_colNavArrow = 0x07E8; // Default green (Navigation screen only)
 uint16_t g_colNavDist  = 0xFFFF; // Default white (Navigation screen only)
+uint16_t g_colNavBar   = 0x077F; // Default cyan (Distance arc bar)
+uint8_t  g_barDir      = 0;      // Distance arc bar fill direction: 0 = Left > Right, 1 = Right > Left
 uint8_t  g_cpuMhz      = 160;    // Default MED (160 MHz): 80, 160, or 240
 bool     g_pollHigh    = false;  // Default LOW (false = Power-save polling, true = 100Hz High polling)
 static Preferences g_prefs;
@@ -83,6 +87,10 @@ static int                   g_sub50Meters    = 40;
 static uint32_t              g_sub50StepAt    = 0;
 static uint32_t              g_sub50Hold10At  = 0;
 static int16_t               g_tapX = 0, g_tapY = 0;
+static int                   s_activePowerTier = -1;
+static int                   calculatePowerTier();
+static bool                  g_nvsDirty       = false;
+static uint32_t              g_nvsSaveAtMs    = 0;
 
 static void dismissNavToHome(const char *reason) {
   g_maneuver         = "";
@@ -152,32 +160,46 @@ static String inferManeuverFromText(const String &text) {
   String t = text;
   t.toLowerCase();
   t.trim();
-  // MUST check destination/arrival FIRST so "Destination will be on the right/left"
-  // (or NavParser's extracted "the right" / "the left" after splitting on " on ")
-  // is not misclassified as a right/left turn!
-  if (t.indexOf("destination") >= 0 || t.indexOf("you have arrived") >= 0 ||
-      t.indexOf("you've arrived") >= 0 || t.indexOf("arrived") >= 0 ||
-      t.indexOf("ziel") >= 0 || t.indexOf("angekommen") >= 0 || t.indexOf("erreicht") >= 0 ||
+  // ONLY match true arrival phrases or destination sides ("on the right/left"),
+  // NOT bare "destination" or bare "ziel" that appear in ETA / route summary texts!
+  if (t.indexOf("you have arrived") >= 0 || t.indexOf("you've arrived") >= 0 ||
+      t.indexOf("arrived") >= 0 || t.indexOf("angekommen") >= 0 ||
+      t.indexOf("erreicht") >= 0 || t.indexOf("am ziel") >= 0 ||
+      t.indexOf("destination ahead") >= 0 || t.indexOf("ziel erreicht") >= 0 ||
       t == "the right" || t == "the left" ||
-      t.startsWith("the right ") || t.startsWith("the left "))
+      t.startsWith("the right ") || t.startsWith("the left ") ||
+      t.indexOf("destination on ") >= 0)
     return "arrive";
   if (t.indexOf("roundabout") >= 0 || t.indexOf("kreisverkehr") >= 0 || t.indexOf("exit") >= 0)
     return "roundabout";
-  if (t.indexOf("u-turn") >= 0 || t.indexOf("uturn") >= 0 || t.indexOf("wenden") >= 0 || t.indexOf("kehrt") >= 0)
+  if (t.indexOf("u-turn") >= 0 || t.indexOf("uturn") >= 0 || t.indexOf("wenden") >= 0 || t.indexOf("kehrt") >= 0 ||
+      t.indexOf("↺") >= 0 || t.indexOf("↻") >= 0)
     return "uturn";
-  if (t.indexOf("sharp right") >= 0 || t.indexOf("scharf rechts") >= 0)
+  if (t.indexOf("sharp right") >= 0 || t.indexOf("scharf rechts") >= 0 || t.indexOf("sharply right") >= 0 || t.indexOf("hard right") >= 0 ||
+      t.indexOf("⮡") >= 0 || t.indexOf("↘") >= 0)
     return "sharp-right";
-  if (t.indexOf("sharp left") >= 0 || t.indexOf("scharf links") >= 0)
+  if (t.indexOf("sharp left") >= 0 || t.indexOf("scharf links") >= 0 || t.indexOf("sharply left") >= 0 || t.indexOf("hard left") >= 0 ||
+      t.indexOf("⮠") >= 0 || t.indexOf("↙") >= 0)
     return "sharp-left";
-  if (t.indexOf("slight right") >= 0 || t.indexOf("keep right") >= 0 || t.indexOf("halb rechts") >= 0 || t.indexOf("bear right") >= 0)
+  if (t.indexOf("halbrechts") >= 0 || t.indexOf("halb rechts") >= 0 ||
+      t.indexOf("slight right") >= 0 || t.indexOf("slightly right") >= 0 || t.indexOf("slight-right") >= 0 ||
+      t.indexOf("keep right") >= 0 || t.indexOf("bear right") >= 0 ||
+      t.indexOf("leicht rechts") >= 0 || t.indexOf("stay right") >= 0 || t.indexOf("fork right") >= 0 ||
+      t.indexOf("rechts halten") >= 0 || t.indexOf("gabelung rechts") >= 0 || t.indexOf("ausfahrt rechts") >= 0 ||
+      t.indexOf("↗") >= 0)
     return "slight-right";
-  if (t.indexOf("slight left") >= 0 || t.indexOf("keep left") >= 0 || t.indexOf("halb links") >= 0 || t.indexOf("bear left") >= 0)
+  if (t.indexOf("halblinks") >= 0 || t.indexOf("halb links") >= 0 ||
+      t.indexOf("slight left") >= 0 || t.indexOf("slightly left") >= 0 || t.indexOf("slight-left") >= 0 ||
+      t.indexOf("keep left") >= 0 || t.indexOf("bear left") >= 0 ||
+      t.indexOf("leicht links") >= 0 || t.indexOf("stay left") >= 0 || t.indexOf("fork left") >= 0 ||
+      t.indexOf("links halten") >= 0 || t.indexOf("gabelung links") >= 0 || t.indexOf("ausfahrt links") >= 0 ||
+      t.indexOf("↖") >= 0)
     return "slight-left";
-  if (t.indexOf("right") >= 0 || t.indexOf("rechts") >= 0)
+  if (t.indexOf("right") >= 0 || t.indexOf("rechts") >= 0 || t.indexOf("↱") >= 0 || t.indexOf("↷") >= 0)
     return "turn-right";
-  if (t.indexOf("left") >= 0 || t.indexOf("links") >= 0)
+  if (t.indexOf("left") >= 0 || t.indexOf("links") >= 0 || t.indexOf("↰") >= 0 || t.indexOf("↶") >= 0)
     return "turn-left";
-  if (t.indexOf("merge") >= 0 || t.indexOf("einordnen") >= 0)
+  if (t.indexOf("merge") >= 0 || t.indexOf("einordnen") >= 0 || t.indexOf("auffahr") >= 0)
     return "merge";
   return "straight";
 }
@@ -211,6 +233,19 @@ void applyPayload(const String &rawPayload) {
       uint16_t dCol = (uint16_t)strtoul(dStr.c_str(), nullptr, 16);
       if (dCol != 0) g_colNavDist = dCol;
     }
+    int gIdx = payload.indexOf("g=");
+    if (gIdx >= 0) {
+      int endIdx = payload.indexOf('|', gIdx);
+      String gStr = (endIdx >= 0) ? payload.substring(gIdx + 2, endIdx) : payload.substring(gIdx + 2);
+      uint16_t gCol = (uint16_t)strtoul(gStr.c_str(), nullptr, 16);
+      if (gCol != 0) g_colNavBar = gCol;
+    }
+    int rIdx = payload.indexOf("r=");
+    if (rIdx >= 0) {
+      int endIdx = payload.indexOf('|', rIdx);
+      String rStr = (endIdx >= 0) ? payload.substring(rIdx + 2, endIdx) : payload.substring(rIdx + 2);
+      g_barDir = (rStr.toInt() != 0) ? 1 : 0;
+    }
     int cIdx = payload.indexOf("c=");
     if (cIdx >= 0) {
       int endIdx = payload.indexOf('|', cIdx);
@@ -228,6 +263,7 @@ void applyPayload(const String &rawPayload) {
     }
     g_cfgDirty = true;
     g_dirtyAll = true;
+    s_activePowerTier = calculatePowerTier();
     return;
   }
 
@@ -252,7 +288,7 @@ void applyPayload(const String &rawPayload) {
       "San Vicente St.", "San Vicente St.", "Destination ahead"
     };
     static const uint8_t kPcts[] = {
-      90,             35,             20,             50,
+      10,             85,             25,             50,
       50,             50,             50,             50,
       50,             50,             0
     };
@@ -341,14 +377,20 @@ void applyPayload(const String &rawPayload) {
     }
   }
 
-  // When Google Maps shows the final destination/arrival card (e.g. "at Bogo Cemetery", "Arrived",
-  // or the destination place name with no direction keyword), NavParser sends m = "unknown".
+  // When navigation app sends m = "unknown":
   if (m == "unknown") {
     if (isAtDestination || (s.length() > 0 && (d == "< 50 m" || d.length() == 0 || curMeters == 0))) {
       m = "arrive";
       isAtDestination = true;
     } else {
-      m = "straight";
+      String inf = inferManeuverFromText(s);
+      if (inf != "straight") {
+        m = inf;
+      } else if (g_iconValid) {
+        m = "unknown";  // Preserves phone bitmap icon rendering in screen_nav
+      } else {
+        m = "unknown";  // Await icon packet or classification
+      }
     }
   }
 
@@ -395,9 +437,9 @@ void applyPayload(const String &rawPayload) {
       g_maxLegMeters = (curMeters > 0) ? curMeters : 100;
     }
     if (curMeters >= 0 && g_maxLegMeters > 0) {
-      g_navProgress = constrain((float)curMeters / (float)g_maxLegMeters, 0.0f, 1.0f);
+      g_navProgress = constrain(1.0f - ((float)curMeters / (float)g_maxLegMeters), 0.0f, 1.0f);
     } else if (curMeters == 0 || m == "arrive") {
-      g_navProgress = 0.0f;
+      g_navProgress = 1.0f;
     }
   }
 
@@ -496,6 +538,49 @@ class IconCharCallbacks : public NimBLECharacteristicCallbacks {
         g_iconValid = true;
         g_dirtyIcon = true;
         Serial.printf("[NAV] icon received (fgBits=%u/1600)\n", setBits);
+
+        // Classify icon into high-res Figma vector arrows
+        uint32_t topSumX = 0, botSumX = 0;
+        uint16_t topFg = 0, botFg = 0;
+        uint16_t topLeftFg = 0, topRightFg = 0;
+        uint16_t botLeftFg = 0, botRightFg = 0;
+
+        for (int y = 0; y < 40; y++) {
+          for (int x = 0; x < 40; x++) {
+            bool fg = (g_iconBits[y * 5 + (x >> 3)] & (0x80 >> (x & 7))) != 0;
+            if (fg) {
+              if (y < 20) {
+                topFg++;
+                topSumX += x;
+                if (x < 20) topLeftFg++; else topRightFg++;
+              } else {
+                botFg++;
+                botSumX += x;
+                if (x < 20) botLeftFg++; else botRightFg++;
+              }
+            }
+          }
+        }
+
+        float topCx = (topFg > 0) ? ((float)topSumX / topFg) : 20.0f;
+        float botCx = (botFg > 0) ? ((float)botSumX / botFg) : 20.0f;
+        float deltaX = topCx - botCx;
+
+        String classified = "";
+        if (botFg > topFg && botLeftFg > 20 && botRightFg > 20) {
+          classified = "uturn";
+        } else if (deltaX < -3.5f || (topLeftFg > topRightFg * 2 && topLeftFg >= 20)) {
+          classified = (deltaX < -8.0f) ? "turn-left" : "slight-left";
+        } else if (deltaX > 3.5f || (topRightFg > topLeftFg * 2 && topRightFg >= 20)) {
+          classified = (deltaX > 8.0f) ? "turn-right" : "slight-right";
+        } else {
+          classified = "straight";
+        }
+
+        if (g_maneuver == "unknown" || g_maneuver.length() == 0) {
+          g_maneuver = classified;
+          Serial.printf("[NAV] classified icon -> %s (deltaX=%.1f)\n", classified.c_str(), deltaX);
+        }
       } else {
         g_iconValid = false;
         g_dirtyIcon = true;
@@ -546,6 +631,41 @@ static void xca9554ResetV1() {
   writeOut(0x03); delay(120);
 }
 
+// ===================== Shutdown Hold Ring UI =====================
+static bool s_holdRingActive = false;
+
+static void drawShutdownHoldRing(float progress, uint32_t secRemaining) {
+  if (!gfx) return;
+  int16_t cardR = 96;
+
+  // Dark background disc & subtle rim
+  gfx->fillCircle(CX, CY, cardR, 0x0841);
+  gfx->drawCircle(CX, CY, cardR, 0x3186);
+
+  // Background ring track (360 degrees)
+  gfx->fillArc(CX, CY, 86, 78, 0.0f, 360.0f, 0x2104);
+
+  // Active progress arc (fills clockwise from 12 o'clock / 270°)
+  progress = constrain(progress, 0.0f, 1.0f);
+  if (progress > 0.005f) {
+    if (progress >= 0.995f) {
+      gfx->fillArc(CX, CY, 86, 78, 0.0f, 360.0f, 0xFA60);
+    } else {
+      float endDeg = fmodf(270.0f + progress * 360.0f, 360.0f);
+      gfx->fillArc(CX, CY, 86, 78, 270.0f, endDeg, 0xFA60);
+    }
+  }
+
+  // Text inside ring
+  drawTextC("POWER OFF", CY - 48, &SFCompactBold9pt7b, 0xFA60);
+  char numStr[4];
+  snprintf(numStr, sizeof(numStr), "%u", (unsigned int)secRemaining);
+  drawTextC(numStr, CY + 5, &SFCompactBold24pt7b, 0xFFFF);
+  drawTextC("Release to cancel", CY + 48, &FreeSans9pt7b, 0xAD55);
+
+  flushDisplay();
+}
+
 static TouchEvent touchPoll() {
   static bool     wasTouched = false;
   static bool     longFired  = false;
@@ -571,17 +691,39 @@ static TouchEvent touchPoll() {
     startY = lastY = y;
     pressStart = millis();
     longFired  = false;
+    s_holdRingActive = false;
   } else if (now) {
     lastX = x;
     lastY = y;
     int16_t dx = lastX - startX, dy = lastY - startY;
-    if (!longFired && abs(dx) < SWIPE_MIN_PX && abs(dy) < SWIPE_MIN_PX &&
-        millis() - pressStart >= LONGPRESS_MS) {
-      ev = TE_LONG_PRESS;
-      longFired = true;
+
+    if (!longFired && abs(dx) < SWIPE_MIN_PX && abs(dy) < SWIPE_MIN_PX) {
+      if (g_backlight) {
+        uint32_t holdMs = millis() - pressStart;
+        if (holdMs >= SHUTDOWN_HOLD_MS) {
+          ev = TE_SHUTDOWN;
+          longFired = true;
+          s_holdRingActive = false;
+        } else if (holdMs >= HOLD_INDICATOR_MS) {
+          s_holdRingActive = true;
+          float p = (float)(holdMs - HOLD_INDICATOR_MS) / (float)(SHUTDOWN_HOLD_MS - HOLD_INDICATOR_MS);
+          uint32_t sec = (SHUTDOWN_HOLD_MS - holdMs + 999) / 1000;
+          drawShutdownHoldRing(p, sec);
+        }
+      }
+    } else if (s_holdRingActive && (abs(dx) >= SWIPE_MIN_PX || abs(dy) >= SWIPE_MIN_PX)) {
+      // Finger moved during hold countdown -> cancel hold ring and restore screen
+      s_holdRingActive = false;
+      g_dirtyAll = true;
+      redraw();
     }
   } else if (wasTouched) {
-    if (!longFired) {
+    if (s_holdRingActive) {
+      // Finger released before reaching 4s -> cancel power off and restore screen
+      s_holdRingActive = false;
+      g_dirtyAll = true;
+      redraw();
+    } else if (!longFired) {
       int16_t dx = lastX - startX, dy = lastY - startY;
       if (abs(dx) < SWIPE_MIN_PX && abs(dy) < SWIPE_MIN_PX) {
         ev = TE_TAP;
@@ -598,6 +740,74 @@ static TouchEvent touchPoll() {
   return ev;
 }
 
+// ===================== Smart Power Profiles =====================
+// Policy:
+// 1. On Battery (unplugged): Brightness 75, CPU 80MHz (LOW), Touch Polling LOW (Power Save)
+// 2. Plugged in < 80% battery: All Medium -> Brightness 160, CPU 160MHz (MED), Touch Polling LOW
+// 3. Plugged in 80%..99% battery: High -> Brightness 200, CPU 240MHz (HIGH), Touch Polling HIGH
+// 4. Plugged in 100% battery (or direct USB): Max -> Brightness 255, CPU 240MHz (HIGH), Touch Polling HIGH
+static int calculatePowerTier() {
+  if (!g_pmuOk) return 3;
+
+  bool pluggedIn = power.isVbusIn() || power.isCharging();
+  if (!pluggedIn) {
+    return 0; // Battery
+  }
+
+  // Plugged in
+  if (!power.isBatteryConnect()) {
+    return 3; // Direct USB with no battery -> Max
+  }
+
+  int pct = power.getBatteryPercent();
+  if (pct < 80) {
+    return 1; // < 80% -> All Medium
+  } else if (pct < 100) {
+    return 2; // 80%..99% -> High
+  } else {
+    return 3; // 100% -> Max
+  }
+}
+
+static void applyPowerTier(int tier, bool force = false) {
+  if (tier == s_activePowerTier && !force) return;
+  s_activePowerTier = tier;
+
+  switch (tier) {
+    case 0:
+      g_config.brightness = 75;
+      g_cpuMhz            = 80;
+      g_pollHigh          = false;
+      break;
+    case 1:
+      g_config.brightness = 160;
+      g_cpuMhz            = 160;
+      g_pollHigh          = false;
+      break;
+    case 2:
+      g_config.brightness = 200;
+      g_cpuMhz            = 240;
+      g_pollHigh          = true;
+      break;
+    case 3:
+    default:
+      g_config.brightness = 255;
+      g_cpuMhz            = 240;
+      g_pollHigh          = true;
+      break;
+  }
+
+  if (getCpuFrequencyMhz() != g_cpuMhz) {
+    setCpuFrequencyMhz(g_cpuMhz);
+  }
+  if (g_panel && g_backlight) {
+    g_panel->setBrightness((uint8_t)g_config.brightness);
+  }
+  g_dirtyAll = true;
+  Serial.printf("[PWR-AUTO] Applied Tier %d -> Brightness=%d, CPU=%uMHz, Poll=%s\n",
+                tier, g_config.brightness, g_cpuMhz, g_pollHigh ? "HIGH" : "LOW");
+}
+
 static bool batteryPoll() {
   if (!g_pmuOk) return false;
   int  lvl = power.isBatteryConnect() ? power.getBatteryPercent() : -1;
@@ -605,6 +815,13 @@ static bool batteryPoll() {
   bool changed = (lvl != g_batLevel) || (chg != g_batCharge);
   g_batLevel  = lvl;
   g_batCharge = chg;
+
+  int tier = calculatePowerTier();
+  if (tier != s_activePowerTier) {
+    applyPowerTier(tier);
+    changed = true;
+  }
+
   return changed;
 }
 
@@ -622,16 +839,110 @@ static void setBacklight(bool on) {
   Serial.printf("[PWR] AMOLED display %s\n", on ? "ON" : "OFF");
 }
 
-static void goToSleep() {
-  Serial.println("[PWR] Sleep timeout reached -> powering down");
+// ===================== Device Shutdown & Power Off =====================
+static void playShutdownAnimation() {
+  if (!gfx || !g_panel) return;
+
+  Serial.println("[PWR] Playing shutdown animation");
+
+  // Step 1: Draw Shutdown Splash Card
+  gfx->fillScreen(COL_BG);
+
+  // Power Icon at (CX, CY - 24)
+  int16_t iconY = CY - 24;
+  gfx->fillArc(CX, iconY, 44, 38, 45.0f, 315.0f, 0xFA60);
+  float rEnd = 41.0f;
+  int16_t c1x = CX + (int16_t)roundf(rEnd * cosf(45.0f * DEG_TO_RAD));
+  int16_t c1y = iconY + (int16_t)roundf(rEnd * sinf(45.0f * DEG_TO_RAD));
+  gfx->fillCircle(c1x, c1y, 3, 0xFA60);
+  int16_t c2x = CX + (int16_t)roundf(rEnd * cosf(315.0f * DEG_TO_RAD));
+  int16_t c2y = iconY + (int16_t)roundf(rEnd * sinf(315.0f * DEG_TO_RAD));
+  gfx->fillCircle(c2x, c2y, 3, 0xFA60);
+  gfx->fillRoundRect(CX - 3, iconY - 48, 7, 32, 3, 0xFA60);
+
+  // Centered labels
+  drawTextC("Powering Off", CY + 54, &SFCompactBold16pt7b, 0xFFFF);
+  drawTextC("Drive Assistant", CY + 88, &SFCompactBold12pt7b, COL_DIM_WHITE);
+
+  flushDisplay();
+  delay(450);
+
+  // Step 2: Glowing collapse into center dot with brightness fade
+  uint8_t initBright = (uint8_t)(g_config.brightness > 0 ? g_config.brightness : 200);
+  const int steps = 10;
+  for (int i = 0; i <= steps; i++) {
+    float t = (float)i / (float)steps;
+    int16_t rad = (int16_t)roundf((1.0f - t) * 90.0f);
+    uint8_t b = (uint8_t)roundf((1.0f - t) * initBright);
+
+    gfx->fillScreen(COL_BG);
+    if (rad > 0) {
+      uint16_t glowCol = blend565(0xFA60, 0xFFFF, (uint8_t)(t * 180));
+      gfx->fillCircle(CX, iconY, rad, glowCol);
+    }
+    flushDisplay();
+    g_panel->setBrightness(b);
+    delay(25);
+  }
+
+  // Pure black final state
+  gfx->fillScreen(COL_BG);
+  flushDisplay();
+  g_panel->setBrightness(0);
+}
+
+static void executeDeviceShutdown(const char *reason) {
+  Serial.printf("[PWR] Shutting down device: %s\n", reason);
+
+  // Flush any pending NVS preferences immediately
+  if (g_nvsDirty) {
+    g_nvsDirty = false;
+    g_prefs.putUChar("bright",   (uint8_t)g_config.brightness);
+    g_prefs.putUShort("colArrow", g_colNavArrow);
+    g_prefs.putUShort("colDist",  g_colNavDist);
+    g_prefs.putUShort("colBar",   g_colNavBar);
+    g_prefs.putUChar("barDir",    g_barDir);
+    g_prefs.putUChar("cpuMhz",   g_cpuMhz);
+    g_prefs.putBool("pollHigh",  g_pollHigh);
+    Serial.println("[CFG] Saved settings to NVS flash before shutdown");
+  }
+
+  // Disconnect BLE cleanly
+  if (NimBLEDevice::getAdvertising()) {
+    NimBLEDevice::getAdvertising()->stop();
+  }
+  if (NimBLEDevice::getServer() && g_connected) {
+    NimBLEDevice::getServer()->disconnect(0);
+    delay(50);
+  }
+
+  // Play graceful shutdown animation
+  playShutdownAnimation();
+
+  // Power off display
   setBacklight(false);
-  delay(80);
+  delay(100);
+
   if (g_pmuOk) {
     power.clearIrqStatus();
-    power.shutdown();
+    // On battery: cut PMU power rails completely
+    if (!power.isVbusIn()) {
+      Serial.println("[PWR] Battery power -> full PMU shutdown");
+      power.shutdown();
+      delay(500);
+    } else {
+      Serial.println("[PWR] USB connected -> deep sleep standby (BOOT button wakes)");
+    }
   }
-  esp_sleep_enable_ext0_wakeup((gpio_num_t)TP_INT, 0);
+
+  // Deep sleep fallback / USB connected mode (woken by BOOT button GPIO 0)
+  esp_sleep_enable_ext0_wakeup((gpio_num_t)0, 0);
   esp_deep_sleep_start();
+}
+
+static void goToSleep() {
+  Serial.println("[PWR] Sleep timeout reached -> powering down");
+  executeDeviceShutdown("Idle Sleep Timeout");
 }
 
 // ===================== QMI8658 6-Axis IMU (Motion / Stop Detector) =====================
@@ -839,19 +1150,18 @@ void setup() {
     Serial.println("[GFX] Display & PSRAM canvas initialized (368x448)");
   }
 
-  // Load saved brightness, nav colors, CPU speed, and polling rate from NVS Preferences
+  // Load saved colors from NVS Preferences
   g_prefs.begin("drive_cfg", false);
-  g_config.brightness = g_prefs.getUChar("bright", 255);
   g_colNavArrow       = g_prefs.getUShort("colArrow", 0x07E8);
   g_colNavDist        = g_prefs.getUShort("colDist", 0xFFFF);
-  uint8_t savedMhz    = g_prefs.getUChar("cpuMhz", 160);
-  if (savedMhz == 80 || savedMhz == 160 || savedMhz == 240) g_cpuMhz = savedMhz;
-  g_pollHigh          = g_prefs.getBool("pollHigh", false);
+  g_colNavBar         = g_prefs.getUShort("colBar", 0x077F);
+  g_barDir            = g_prefs.getUChar("barDir", 0);
 
-  setCpuFrequencyMhz(g_cpuMhz);
-  Serial.printf("[PWR] CPU=%u MHz, Poll=%s\n", g_cpuMhz, g_pollHigh ? "HIGH" : "LOW");
+  // Apply default power profile based on battery & power status
+  int initialTier = calculatePowerTier();
+  applyPowerTier(initialTier, true);
 
-  g_panel->setBrightness(g_config.brightness > 0 ? (uint8_t)g_config.brightness : 255);
+  g_panel->setBrightness(g_config.brightness > 0 ? (uint8_t)g_config.brightness : 75);
   gfx->fillScreen(COL_BG);
   redraw();
   setBacklight(true);
@@ -922,6 +1232,10 @@ void loop() {
         setBacklight(!g_backlight);
         if (g_backlight) g_dirtyAll = true;
       }
+      // Physical PWR button long press shuts down device
+      if (common_consume_pwr_long()) {
+        executeDeviceShutdown("Physical PWR Button");
+      }
     }
   }
 
@@ -972,8 +1286,8 @@ void loop() {
         Serial.println("[UI] Tap -> Home (Screen 0)");
       }
       break;
-    case TE_LONG_PRESS:
-      if (g_backlight) setBacklight(false);
+    case TE_SHUTDOWN:
+      executeDeviceShutdown("4s Display Long Press");
       break;
     case TE_SWIPE_LEFT:
       if (g_backlight) {
@@ -1018,8 +1332,6 @@ void loop() {
 
   // Apply pending display & power config changes immediately on the UI loop thread,
   // and debounce NVS flash writes (1000 ms) so slider dragging never spams flash.
-  static bool     s_nvsDirty    = false;
-  static uint32_t s_nvsSaveAtMs = 0;
   if (g_cfgDirty) {
     g_cfgDirty = false;
     if (!g_backlight) setBacklight(true);
@@ -1029,19 +1341,21 @@ void loop() {
     if (getCpuFrequencyMhz() != g_cpuMhz) {
       setCpuFrequencyMhz(g_cpuMhz);
     }
-    s_nvsDirty    = true;
-    s_nvsSaveAtMs = nowMs;
+    g_nvsDirty    = true;
+    g_nvsSaveAtMs = nowMs;
     g_dirtyAll    = true;
-    Serial.printf("[CFG] bright=%d arrow=0x%04X dist=0x%04X cpu=%uMHz poll=%s\n",
-                  g_config.brightness, g_colNavArrow, g_colNavDist,
+    Serial.printf("[CFG] bright=%d arrow=0x%04X dist=0x%04X bar=0x%04X dir=%u cpu=%uMHz poll=%s\n",
+                  g_config.brightness, g_colNavArrow, g_colNavDist, g_colNavBar, g_barDir,
                   g_cpuMhz, g_pollHigh ? "HIGH" : "LOW");
   }
 
-  if (s_nvsDirty && (nowMs - s_nvsSaveAtMs >= 1000)) {
-    s_nvsDirty = false;
+  if (g_nvsDirty && (nowMs - g_nvsSaveAtMs >= 1000)) {
+    g_nvsDirty = false;
     g_prefs.putUChar("bright",   (uint8_t)g_config.brightness);
     g_prefs.putUShort("colArrow", g_colNavArrow);
     g_prefs.putUShort("colDist",  g_colNavDist);
+    g_prefs.putUShort("colBar",   g_colNavBar);
+    g_prefs.putUChar("barDir",    g_barDir);
     g_prefs.putUChar("cpuMhz",   g_cpuMhz);
     g_prefs.putBool("pollHigh",  g_pollHigh);
     Serial.println("[CFG] Saved settings to NVS flash");

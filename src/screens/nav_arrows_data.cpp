@@ -15544,21 +15544,23 @@ static const NavManeuverBitmap s_navBitmaps[] = {
   { "uturn", 108, 47, 141, 256, s_bm_uturn_alpha, nullptr },
   { "merge", 107, 44, 138, 259, s_bm_merge_alpha, nullptr },
   { "roundabout", 108, 106, 172, 197, s_bm_roundabout_alpha, nullptr },
-  { "arrive", 138, 69, 92, 226, nullptr, s_bm_arrive_rgb565 },
+  { "arrive", 138, 69, 92, 160, nullptr, s_bm_arrive_rgb565 },
 };
 
 const NavManeuverBitmap* getNavManeuverBitmap(const String &m) {
-  if (m == "turn-right" || m == "right") {
+  if (m == "turn-right" || m == "turn_right" || m == "right") {
     return &s_navBitmaps[1];
-  } else if (m == "turn-left" || m == "left") {
+  } else if (m == "turn-left" || m == "turn_left" || m == "left") {
     return &s_navBitmaps[2];
-  } else if (m == "slight-right" || m == "keep-right") {
+  } else if (m == "slight-right" || m == "slight_right" || m == "keep-right" || m == "keep_right" ||
+             m == "slightly-right" || m == "slightly_right" || m == "bear-right" || m == "bear_right") {
     return &s_navBitmaps[3];
-  } else if (m == "slight-left" || m == "keep-left") {
+  } else if (m == "slight-left" || m == "slight_left" || m == "keep-left" || m == "keep_left" ||
+             m == "slightly-left" || m == "slightly_left" || m == "bear-left" || m == "bear_left") {
     return &s_navBitmaps[4];
-  } else if (m == "sharp-right") {
+  } else if (m == "sharp-right" || m == "sharp_right" || m == "hard-right") {
     return &s_navBitmaps[5];
-  } else if (m == "sharp-left") {
+  } else if (m == "sharp-left" || m == "sharp_left" || m == "hard-left") {
     return &s_navBitmaps[6];
   } else if (m == "uturn" || m == "u-turn") {
     return &s_navBitmaps[7];

@@ -43,6 +43,8 @@
 // Configurable colors exclusively for active Navigation screen (screen_nav.cpp)
 extern uint16_t g_colNavArrow;
 extern uint16_t g_colNavDist;
+extern uint16_t g_colNavBar;
+extern uint8_t  g_barDir;   // Distance arc bar fill direction: 0 = Left > Right, 1 = Right > Left
 extern uint8_t  g_cpuMhz;
 extern bool     g_pollHigh;
 

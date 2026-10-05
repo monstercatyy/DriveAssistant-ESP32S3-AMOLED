@@ -43,13 +43,15 @@ public final class MapsNotificationListenerService extends NotificationListenerS
     private static final String MAPS_PKG = "com.google.android.apps.maps";
     public static final String KOMOOT_PKG = "de.komoot.android";
     public static final String OSMAND_PREFIX = "net.osmand";
+    public static final String KURVIGER_PKG = "com.kurviger.app";
+    public static final String KURVIGER_LEGACY_PREFIX = "gr.talent.kurviger";
     private static final long NAV_END_DELAY_MS = 15000;
 
     public static final boolean isNavPackage(String pkg) {
         if (pkg == null) {
             return false;
         }
-        return pkg.equals(MAPS_PKG) || pkg.equals(KOMOOT_PKG) || pkg.startsWith(OSMAND_PREFIX);
+        return pkg.equals(MAPS_PKG) || pkg.equals(KOMOOT_PKG) || pkg.startsWith(OSMAND_PREFIX) || pkg.equals(KURVIGER_PKG) || pkg.startsWith(KURVIGER_LEGACY_PREFIX);
     }
     private static final String TAG = "MapsListener";
     private int lastIconHash;
@@ -84,18 +86,23 @@ public final class MapsNotificationListenerService extends NotificationListenerS
         }
     }
 
+    private String lastRemoteViewsText;
+
     private final void collectTextViews(View view, StringBuilder sb) {
         if (view == null) {
             return;
         }
         if (view instanceof TextView) {
             CharSequence text = ((TextView) view).getText();
-            if (text != null) {
+            if (text != null && text.length() > 0) {
                 sb.append(" ");
                 sb.append(text);
-                return;
             }
-            return;
+        }
+        CharSequence desc = view.getContentDescription();
+        if (desc != null && desc.length() > 0) {
+            sb.append(" ");
+            sb.append(desc);
         }
         if (view instanceof ViewGroup) {
             ViewGroup viewGroup = (ViewGroup) view;
@@ -107,12 +114,9 @@ public final class MapsNotificationListenerService extends NotificationListenerS
     }
 
     private final String enrichTitleWithViewDistance(StatusBarNotification statusBarNotification, String str, String str2) {
-        String value;
+        this.lastRemoteViewsText = "";
         if (str == null) {
             str = "";
-        }
-        if (new Regex("(\\d+(?:[.,]\\d+)?)[\\s\\u00a0\\u202f]*(km|m|mi|ft|yd)\\b", RegexOption.IGNORE_CASE).containsMatchIn(str)) {
-            return str;
         }
         try {
             Notification notification = statusBarNotification.getNotification();
@@ -121,18 +125,34 @@ public final class MapsNotificationListenerService extends NotificationListenerS
                 remoteViews = notification.contentView;
             }
             if (remoteViews == null) {
+                remoteViews = notification.headsUpContentView;
+            }
+            if (remoteViews != null) {
+                Context createPackageContext = createPackageContext(statusBarNotification.getPackageName(), 0);
+                createPackageContext.setTheme(createPackageContext.getApplicationInfo().theme);
+                View apply = remoteViews.apply(createPackageContext, new FrameLayout(createPackageContext));
+                StringBuilder sb = new StringBuilder();
+                collectTextViews(apply, sb);
+                this.lastRemoteViewsText = sb.toString();
+            }
+            CharSequence tickerText = notification.tickerText;
+            if (tickerText != null && tickerText.length() > 0) {
+                this.lastRemoteViewsText = (this.lastRemoteViewsText != null && this.lastRemoteViewsText.length() > 0)
+                        ? (this.lastRemoteViewsText + " " + tickerText) : tickerText.toString();
+            }
+            if (new Regex("(\\d+(?:[.,]\\d+)?)[\\s\\u00a0\\u202f]*(km|m|mi|ft|yd)\\b", RegexOption.IGNORE_CASE).containsMatchIn(str)) {
                 return str;
             }
-            Context createPackageContext = createPackageContext(statusBarNotification.getPackageName(), 0);
-            createPackageContext.setTheme(createPackageContext.getApplicationInfo().theme);
-            View apply = remoteViews.apply(createPackageContext, new FrameLayout(createPackageContext));
-            StringBuilder sb = new StringBuilder();
-            collectTextViews(apply, sb);
-            MatchResult find$default = Regex.find$default(new Regex("\\b([0-4]?\\d)[\\s\\u00a0\\u202f]*(m|ft|yd)\\b", RegexOption.IGNORE_CASE), sb.toString(), 0, 2, null);
-            if (find$default == null || (value = find$default.getValue()) == null) {
-                return str;
+            if (this.lastRemoteViewsText != null && this.lastRemoteViewsText.length() > 0) {
+                MatchResult find$default = Regex.find$default(new Regex("(\\d+(?:[.,]\\d+)?)[\\s\\u00a0\\u202f]*(km|m|mi|ft|yd)\\b", RegexOption.IGNORE_CASE), this.lastRemoteViewsText, 0, 2, null);
+                if (find$default != null) {
+                    String value = find$default.getValue();
+                    if (value != null && value.length() > 0) {
+                        return value + " " + str;
+                    }
+                }
             }
-            return value + " " + str;
+            return str;
         } catch (Exception unused) {
             return str;
         }
@@ -257,10 +277,21 @@ public final class MapsNotificationListenerService extends NotificationListenerS
             Log.d(TAG, "subText = " + obj3);
             Log.d(TAG, "bigText = " + obj4);
             NavParser navParser = NavParser.INSTANCE;
-            if (obj2 == null) {
-                obj2 = obj4;
+            String combinedText = obj2;
+            if (obj4 != null && !Intrinsics.areEqual(obj4, obj2)) {
+                combinedText = (combinedText != null) ? (combinedText + " " + obj4) : obj4;
             }
-            NavData transformSub50NavData = transformSub50NavData(navParser.parse(enrichTitleWithViewDistance(sbn, obj, obj4), obj2, null));
+            if (obj3 != null && !Intrinsics.areEqual(obj3, obj2) && !Intrinsics.areEqual(obj3, obj4)) {
+                combinedText = (combinedText != null) ? (combinedText + " " + obj3) : obj3;
+            }
+            NavData parsed = navParser.parse(enrichTitleWithViewDistance(sbn, obj, obj4), combinedText, this.lastRemoteViewsText);
+            if ("unknown".equals(parsed.getManeuver())) {
+                String detectedFromIcon = IconClassifier.detectManeuver(this, sbn);
+                if (!"unknown".equals(detectedFromIcon)) {
+                    parsed = new NavData(detectedFromIcon, parsed.getDistance(), parsed.getStreet(), parsed.getRaw());
+                }
+            }
+            NavData transformSub50NavData = transformSub50NavData(parsed);
             if (transformSub50NavData.isEmpty()) {
                 return;
             }
@@ -278,10 +309,7 @@ public final class MapsNotificationListenerService extends NotificationListenerS
     private final void sendManeuverIcon(StatusBarNotification sbn) {
         Icon largeIcon = sbn.getNotification().getLargeIcon();
         if (largeIcon == null) {
-            largeIcon = sbn.getNotification().getSmallIcon();
-        }
-        if (largeIcon == null) {
-            Log.d(TAG, "kein Icon in der Benachrichtigung");
+            BleManager.INSTANCE.sendIcon(new byte[]{73, 0, 0});
             return;
         }
         Drawable loadDrawable = largeIcon.loadDrawable(this);
