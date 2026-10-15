@@ -180,6 +180,10 @@ static String inferManeuverFromText(const String &text) {
   String t = text;
   t.toLowerCase();
   t.trim();
+  if (t.indexOf("re-routing") >= 0 || t.indexOf("rerouting") >= 0 ||
+      t.indexOf("re-route") >= 0 || t.indexOf("reroute") >= 0 ||
+      t.indexOf("recalculat") >= 0)
+    return "reroute";
   // ONLY match true arrival phrases or destination sides ("on the right/left"),
   // NOT bare "destination" or bare "ziel" that appear in ETA / route summary texts!
   if (t.indexOf("you have arrived") >= 0 || t.indexOf("you've arrived") >= 0 ||
@@ -319,36 +323,36 @@ void applyPayload(const String &rawPayload) {
     static const char *const kManeuvers[] = {
       "straight",     "turn-right",   "turn-left",    "slight-right",
       "slight-left",  "sharp-right",  "sharp-left",   "uturn",
-      "merge",        "roundabout",   "arrive"
+      "merge",        "roundabout",   "reroute",      "arrive"
     };
     static const char *const kDistances[] = {
       "10.3 km",      "200 m",        "4.2 km",       "0.3 km",
       "0.3 km",       "0.3 km",       "0.3 km",       "0.3 km",
-      "0.3 km",       "0.3 km",       "0 m"
+      "0.3 km",       "0.3 km",       "--",           "0 m"
     };
     static const char *const kStreets[] = {
       "Osmeña Blvd",  "San Vicente St.", "San Vicente St.", "San Vicente St.",
       "San Vicente St.", "San Vicente St.", "San Vicente St.", "San Vicente St.",
-      "San Vicente St.", "San Vicente St.", "Destination ahead"
+      "San Vicente St.", "San Vicente St.", "Re-routing...", "Destination ahead"
     };
     static const uint8_t kPcts[] = {
       10,             85,             25,             50,
       50,             50,             50,             50,
-      50,             50,             0
+      50,             50,             0,              0
     };
     static uint8_t s_testIdx = 0;
     const uint8_t idx = s_testIdx;
-    s_testIdx = (s_testIdx + 1) % 11;
+    s_testIdx = (s_testIdx + 1) % 12;
 
     static const char *const kWeatherCond[] = {
       "sun",     "sun",     "pcloudy", "cloudy",
       "rain",    "thunder", "pcloudy", "sun",
-      "cloudy",  "rain",    "sun"
+      "cloudy",  "rain",    "pcloudy", "sun"
     };
     static const char *const kWeatherTemp[] = {
       "30°",     "29°",     "28°",     "26°",
       "24°",     "23°",     "27°",     "31°",
-      "25°",     "24°",     "28°"
+      "25°",     "24°",     "26°",     "28°"
     };
     g_weatherCond = kWeatherCond[idx];
     g_weatherTemp = kWeatherTemp[idx];

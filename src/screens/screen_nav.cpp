@@ -221,8 +221,9 @@ static void drawManeuverBitmap(const String &m, uint16_t color) {
 
 // Renders the 270° circular Distance Bar (0-100% distance to maneuver)
 static void drawDistanceBar() {
-  // Completely remove distance arc bars on arrival or ended screens
-  if (g_maneuver == "arrive" || g_distance == "Arrived" || g_navEnded) {
+  // Completely remove distance arc bars on arrival, ended, or rerouting screens
+  if (g_maneuver == "arrive" || g_distance == "Arrived" || g_navEnded ||
+      g_maneuver == "reroute" || g_maneuver == "re-route") {
     return;
   }
 
@@ -281,6 +282,21 @@ static void drawDistanceBar() {
 
 // ===================== Sub-region Renderers =====================
 static void drawIconRegion() {
+  if (g_maneuver == "reroute" || g_maneuver == "re-route") {
+    gfx->fillRect(ICON_AREA_X, ICON_AREA_Y, ICON_AREA_W, ICON_AREA_H, COL_BG);
+    const int16_t cx = ICON_CX;
+    const int16_t cy = ICON_CY;
+    const uint16_t cyanCol = 0x077F;
+    gfx->fillCircle(cx, cy, 10, 0xFFFF);
+    gfx->drawCircle(cx, cy, 18, cyanCol);
+    gfx->drawCircle(cx, cy, 19, cyanCol);
+    gfx->fillArc(cx, cy, 54, 44, 205, 345, cyanCol);
+    gfx->fillTriangle(cx + 56, cy + 8, cx + 38, cy - 12, cx + 66, cy - 20, cyanCol);
+    gfx->fillArc(cx, cy, 54, 44, 25, 165, cyanCol);
+    gfx->fillTriangle(cx - 56, cy - 8, cx - 38, cy + 12, cx - 66, cy + 20, cyanCol);
+    return;
+  }
+
   if (g_maneuver == "unknown" && g_iconValid && g_iconCanvas) {
     const int16_t x0 = ICON_CX - OUT_ICON_W / 2, y0 = ICON_CY - OUT_ICON_H / 2;
     gfx->fillRect(ICON_AREA_X, ICON_AREA_Y, ICON_AREA_W, ICON_AREA_H, COL_BG);
@@ -297,6 +313,12 @@ static void drawIconRegion() {
 static void drawDistRegion() {
   gfx->fillRect(10, DIST_RECT_Y, SCREEN_W - 20, DIST_RECT_H, COL_BG);
   if (!g_distance.length()) return;
+
+  if (g_maneuver == "reroute" || g_maneuver == "re-route") {
+    drawTextC("RE-ROUTING", DIST_NUM_CY, &SFCompactBold24pt7b, 0x077F /* cyan */);
+    drawTextC("Recalculating...", DIST_UNIT_CY, &SFCompactBold12pt7b, 0xFFFF /* white */);
+    return;
+  }
 
   if (g_maneuver == "arrive" || g_distance == "Arrived") {
     if (g_distance == "0 m") {
@@ -337,6 +359,10 @@ static void drawDistRegion() {
 
 static void drawStreetRegion() {
   gfx->fillRect(10, STREET_RECT_Y, SCREEN_W - 20, STREET_RECT_H, COL_BG);
+  if (g_maneuver == "reroute" || g_maneuver == "re-route") {
+    drawTextC("Finding new route...", STREET_CY, &SFCompactBold12pt7b, COL_DIM_WHITE);
+    return;
+  }
   if (g_street.length() && g_maneuver != "arrive" && g_distance != "Arrived") {
     drawTextC(fitStreet(g_street, &SFCompactBold12pt7b, STREET_MAX_W),
               STREET_CY, &SFCompactBold12pt7b, COL_DIM_WHITE);

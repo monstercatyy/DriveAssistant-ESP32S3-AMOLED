@@ -35,6 +35,7 @@ public class BluetoothManager {
 
     public interface StatusListener {
         void onConnectionStateChange(boolean connected, String deviceName);
+        void onGattReady();
         void onLog(String message);
     }
 
@@ -136,8 +137,17 @@ public class BluetoothManager {
                     mgr.navChar = service.getCharacteristic(NAV_CHAR_UUID);
                     mgr.cmdChar = service.getCharacteristic(CMD_CHAR_UUID);
                     Log.d(TAG, "Drive Assistant GATT characteristics ready!");
+                    mgr.handler.post(new NotifyGattReadyRunnable(mgr));
                 }
             }
+        }
+    }
+
+    private static class NotifyGattReadyRunnable implements Runnable {
+        private final BluetoothManager mgr;
+        NotifyGattReadyRunnable(BluetoothManager mgr) { this.mgr = mgr; }
+        @Override public void run() {
+            if (mgr.listener != null) mgr.listener.onGattReady();
         }
     }
 

@@ -22,8 +22,8 @@ String   g_navTotalDist = "";
 uint8_t  g_iconBits[ICON_W * ICON_H / 8];
 bool     g_iconValid   = false;
 uint16_t *g_iconCanvas = nullptr;
-String   g_weatherCond = "sun";
-String   g_weatherTemp = "28°";
+String   g_weatherCond = "";
+String   g_weatherTemp = "";
 
 uint8_t  g_mediaState  = 0;
 String   g_mediaTitle  = "";

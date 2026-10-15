@@ -96,6 +96,10 @@ public class MainActivity extends Activity implements BluetoothManager.StatusLis
     private long lastWeatherPollTimeMs = 0;
     private String currentWeatherCond = "sun";
     private String currentWeatherTemp = "28°";
+    private double currentDestLat = 0.0;
+    private double currentDestLng = 0.0;
+    private int offRouteCount = 0;
+    private boolean isRerouting = false;
 
     private final ExecutorService tileExecutor = Executors.newSingleThreadExecutor();
     private volatile boolean isDownloadCancelled = false;
@@ -406,6 +410,9 @@ public class MainActivity extends Activity implements BluetoothManager.StatusLis
         long now = SystemClock.elapsedRealtime();
         // Poll once every 15 minutes (900,000 ms), or on first GPS fix
         if (lastWeatherPollTimeMs != 0 && (now - lastWeatherPollTimeMs < 15 * 60 * 1000L)) {
+            if (btManager != null && btManager.isConnected() && currentWeatherCond != null) {
+                btManager.sendWeatherPacket(currentWeatherCond, currentWeatherTemp);
+            }
             return;
         }
         lastWeatherPollTimeMs = now;
@@ -426,7 +433,7 @@ public class MainActivity extends Activity implements BluetoothManager.StatusLis
         @Override public void run() {
             try {
                 String urlStr = String.format(Locale.US,
-                    "https://api.open-meteo.com/v1/forecast?latitude=%.4f&longitude=%.4f&current=weather_code,temperature_2m",
+                    "https://api.open-meteo.com/v1/forecast?latitude=%.4f&longitude=%.4f&current=weather_code,temperature_2m,is_day",
                     lat, lng);
                 java.net.URL url = new java.net.URL(urlStr);
                 java.net.HttpURLConnection conn = (java.net.HttpURLConnection) url.openConnection();
@@ -445,20 +452,29 @@ public class MainActivity extends Activity implements BluetoothManager.StatusLis
                         org.json.JSONObject cur = root.getJSONObject("current");
                         int code = cur.optInt("weather_code", 0);
                         double temp = cur.optDouble("temperature_2m", 28.0);
+                        int isDay = cur.optInt("is_day", 1);
 
-                        String cond = "sun";
-                        if (code == 0) cond = "sun";
-                        else if (code == 1 || code == 2) cond = "pcloudy";
-                        else if (code == 3) cond = "cloudy";
-                        else if (code == 45 || code == 48) cond = "fog";
-                        else if ((code >= 51 && code <= 67) || (code >= 80 && code <= 82)) cond = "rain";
-                        else if ((code >= 71 && code <= 77) || (code >= 85 && code <= 86)) cond = "snow";
-                        else if (code >= 95 && code <= 99) cond = "thunder";
+                        String cond = (isDay == 0) ? "night" : "sun";
+                        if (code == 0) {
+                            cond = (isDay == 0) ? "night" : "sun";
+                        } else if (code == 1 || code == 2) {
+                            cond = (isDay == 0) ? "night_cloud" : "pcloudy";
+                        } else if (code == 3) {
+                            cond = "cloudy";
+                        } else if (code == 45 || code == 48) {
+                            cond = "fog";
+                        } else if ((code >= 51 && code <= 67) || (code >= 80 && code <= 82)) {
+                            cond = "rain";
+                        } else if ((code >= 71 && code <= 77) || (code >= 85 && code <= 86)) {
+                            cond = "snow";
+                        } else if (code >= 95 && code <= 99) {
+                            cond = "thunder";
+                        }
 
                         act.currentWeatherCond = cond;
                         act.currentWeatherTemp = Math.round(temp) + "°";
 
-                        Log.i("MainActivity", "Weather polled: " + cond + " " + act.currentWeatherTemp);
+                        Log.i("MainActivity", "Weather polled: " + cond + " " + act.currentWeatherTemp + " (isDay=" + isDay + ", code=" + code + ")");
                         if (act.btManager != null && act.btManager.isConnected()) {
                             act.btManager.sendWeatherPacket(act.currentWeatherCond, act.currentWeatherTemp);
                         }
@@ -473,6 +489,26 @@ public class MainActivity extends Activity implements BluetoothManager.StatusLis
 
     private void updateActiveNavigation() {
         if (activeRoute == null || activeRoute.steps.isEmpty()) return;
+        if (isRerouting) return;
+
+        // 1. Off-Route Detection & Auto-Reroute
+        if (activeRoute.pathPoints != null && activeRoute.pathPoints.size() >= 2 && currentDestLat != 0.0) {
+            float[] destDist = new float[1];
+            Location.distanceBetween(currentLat, currentLng, currentDestLat, currentDestLng, destDist);
+            if (destDist[0] > 35.0f) {
+                double distToRoute = getDistanceToRouteMeters(currentLat, currentLng, activeRoute);
+                if (distToRoute > 45.0) {
+                    offRouteCount++;
+                    Log.d("MainActivity", "Off-route detected: dist=" + Math.round(distToRoute) + "m, count=" + offRouteCount);
+                    if (offRouteCount >= 3 && !isRerouting) {
+                        triggerAutoReroute();
+                        return;
+                    }
+                } else {
+                    offRouteCount = 0;
+                }
+            }
+        }
 
         // Ensure current step index is within bounds
         if (currentStepIndex >= activeRoute.steps.size()) {
@@ -565,6 +601,67 @@ public class MainActivity extends Activity implements BluetoothManager.StatusLis
         final float spd = currentSpeedKmh;
 
         runOnUiThread(new UpdateNavHudRunnable(this, m, td, st, rd, rdur, eta, nnm, spd));
+    }
+
+    private void triggerAutoReroute() {
+        if (isRerouting) return;
+        isRerouting = true;
+        offRouteCount = 0;
+
+        Log.i("MainActivity", "User off-route. Triggering auto-reroute to " + currentDestLat + ", " + currentDestLng);
+        runOnUiThread(new ToastRunnable(this, "Off route. Re-routing..."));
+
+        // Notify ESP32 AMOLED device immediately with reroute status:
+        if (btManager != null && btManager.isConnected()) {
+            btManager.sendNavPacket("reroute", "--", "Re-routing...", 0, "--", "--");
+        }
+
+        // Notify in-app HUD:
+        runOnUiThread(new UpdateNavHudRunnable(this, "reroute", "--", "Re-routing...", "--", "--", "--", "", currentSpeedKmh));
+
+        routeManager.calculateRoute(currentLat, currentLng, currentDestLat, currentDestLng, new NavCalculationCallback(this));
+    }
+
+    private double getDistanceToRouteMeters(double pLat, double pLng, RouteManager.RouteResult route) {
+        if (route == null || route.pathPoints == null || route.pathPoints.size() < 2) {
+            return 0.0;
+        }
+        List<double[]> pts = route.pathPoints;
+        double minDistance = Double.MAX_VALUE;
+        for (int i = 0; i < pts.size() - 1; i++) {
+            double[] a = pts.get(i);
+            double[] b = pts.get(i + 1);
+            double dist = distanceToSegmentMeters(pLat, pLng, a[0], a[1], b[0], b[1]);
+            if (dist < minDistance) {
+                minDistance = dist;
+            }
+        }
+        return minDistance;
+    }
+
+    private static double distanceToSegmentMeters(double pLat, double pLng,
+                                                  double aLat, double aLng,
+                                                  double bLat, double bLng) {
+        double cosLat = Math.cos(Math.toRadians(aLat));
+        double xB = (bLng - aLng) * 111139.0 * cosLat;
+        double yB = (bLat - aLat) * 111139.0;
+        double xP = (pLng - aLng) * 111139.0 * cosLat;
+        double yP = (pLat - aLat) * 111139.0;
+
+        double l2 = xB * xB + yB * yB;
+        if (l2 < 0.001) {
+            return Math.sqrt(xP * xP + yP * yP);
+        }
+
+        double t = (xP * xB + yP * yB) / l2;
+        if (t < 0.0) t = 0.0;
+        else if (t > 1.0) t = 1.0;
+
+        double xC = t * xB;
+        double yC = t * yB;
+        double dx = xP - xC;
+        double dy = yP - yC;
+        return Math.sqrt(dx * dx + dy * dy);
     }
 
     private void updateRoadVectors() {
@@ -969,6 +1066,11 @@ public class MainActivity extends Activity implements BluetoothManager.StatusLis
     }
 
     @Override
+    public void onGattReady() {
+        runOnUiThread(new GattReadyRunnable(this));
+    }
+
+    @Override
     public void onLog(String message) {
         runOnUiThread(new ToastRunnable(this, message));
     }
@@ -995,6 +1097,8 @@ public class MainActivity extends Activity implements BluetoothManager.StatusLis
 
         @JavascriptInterface
         public void calculateRoute(double startLat, double startLng, double destLat, double destLng) {
+            act.currentDestLat = destLat;
+            act.currentDestLng = destLng;
             act.runOnUiThread(new ToastRunnable(act, "Calculating route..."));
             act.routeManager.calculateRoute(startLat, startLng, destLat, destLng, new NavCalculationCallback(act));
         }
@@ -1214,10 +1318,21 @@ public class MainActivity extends Activity implements BluetoothManager.StatusLis
     void onRouteCalculated(RouteManager.RouteResult result) {
         activeRoute = result;
         currentStepIndex = 0;
+        lastRoutePointIndex = 0;
+        lastTurnDist = -1.0f;
+        lastTurnDistTimeMs = 0;
+        offRouteCount = 0;
+        isRerouting = false;
+
+        if (result != null && result.pathPoints != null && !result.pathPoints.isEmpty()) {
+            double[] lastPt = result.pathPoints.get(result.pathPoints.size() - 1);
+            currentDestLat = lastPt[0];
+            currentDestLng = lastPt[1];
+        }
 
         String firstManeuver = "Continue";
         String firstStreet = "Road";
-        if (!result.steps.isEmpty()) {
+        if (result != null && !result.steps.isEmpty()) {
             firstManeuver = result.steps.get(0).maneuver;
             firstStreet = result.steps.get(0).street;
         }
@@ -1226,9 +1341,13 @@ public class MainActivity extends Activity implements BluetoothManager.StatusLis
         final String s = firstStreet;
 
         runOnUiThread(new RouteSuccessRunnable(this, result, m, s));
+        if (isNavigating) {
+            updateActiveNavigation();
+        }
     }
 
     void onRouteError(String error) {
+        isRerouting = false;
         runOnUiThread(new ToastRunnable(this, error));
     }
 
@@ -1297,6 +1416,20 @@ public class MainActivity extends Activity implements BluetoothManager.StatusLis
             act.webView.evaluateJavascript("setBluetoothState(" + connected + ", '" + (name != null ? name : "") + "');", null);
             if (connected && act.btManager != null && act.currentWeatherCond != null) {
                 act.btManager.sendWeatherPacket(act.currentWeatherCond, act.currentWeatherTemp);
+            }
+        }
+    }
+
+    private static class GattReadyRunnable implements Runnable {
+        private final MainActivity act;
+        GattReadyRunnable(MainActivity act) { this.act = act; }
+        @Override public void run() {
+            if (act.currentWeatherCond != null && act.btManager != null && act.btManager.isConnected()) {
+                act.btManager.sendWeatherPacket(act.currentWeatherCond, act.currentWeatherTemp);
+                Log.i("MainActivity", "GATT ready: sent cached weather: " + act.currentWeatherCond + " " + act.currentWeatherTemp);
+            }
+            if (act.hasGpsFix) {
+                act.checkPollWeather(act.currentLat, act.currentLng);
             }
         }
     }

@@ -316,7 +316,18 @@ static void drawManeuverIcon3X(int16_t cx, int16_t cy, const String &m, uint16_t
   String ml = m;
   ml.toLowerCase();
 
-  if (ml.indexOf("arrive") >= 0 || ml.indexOf("ziel") >= 0) {
+  if (ml.indexOf("reroute") >= 0 || ml.indexOf("re-route") >= 0) {
+    // 3X Dual circulating arrows (recalculating / reroute)
+    const uint16_t cyanCol = 0x077F;
+    gfx->fillCircle(cx, cy, 6, 0xFFFF);
+    gfx->drawCircle(cx, cy, 10, cyanCol);
+    gfx->drawCircle(cx, cy, 11, cyanCol);
+    gfx->fillArc(cx, cy, 33, 27, 205, 345, cyanCol);
+    gfx->fillTriangle(cx + 34, cy + 4, cx + 20, cy - 6, cx + 38, cy - 14, cyanCol);
+    gfx->fillArc(cx, cy, 33, 27, 25, 165, cyanCol);
+    gfx->fillTriangle(cx - 34, cy - 4, cx - 20, cy + 6, cx - 38, cy + 14, cyanCol);
+
+  } else if (ml.indexOf("arrive") >= 0 || ml.indexOf("ziel") >= 0) {
     // Concentric target destination marker
     gfx->fillCircle(cx, cy, 12, 0x07E0);
     gfx->drawCircle(cx, cy, 22, color);
@@ -634,11 +645,32 @@ static void draw3DRoadNetwork() {
 
 // ===================== Weather Widget (Top-Right HUD) =====================
 static void drawWeatherWidget(int16_t cx, int16_t cy) {
+  if (g_weatherCond.length() == 0) return;
+
   String cond = g_weatherCond;
   cond.toLowerCase();
 
-  if (cond.indexOf("sun") >= 0 || cond.indexOf("clear") >= 0) {
-    // 1. Sunny / Clear: Bright yellow sun with radiant rays
+  if (cond.indexOf("night") >= 0 || cond.indexOf("moon") >= 0) {
+    if (cond.indexOf("cloud") >= 0) {
+      // 1. Partly Cloudy Night: Crescent moon peeking behind cloud
+      const uint16_t moonCol = 0xFFF2; // Soft moonlight
+      const uint16_t cldCol  = 0xD6BA; // Cloud
+      gfx->fillCircle(cx + 4, cy - 6, 6, moonCol);
+      gfx->fillCircle(cx + 7, cy - 8, 5, COL_BG); // Crescent cut
+      // Cloud in front
+      gfx->fillCircle(cx - 5, cy + 2, 5, cldCol);
+      gfx->fillCircle(cx + 1, cy - 1, 6, cldCol);
+      gfx->fillCircle(cx + 7, cy + 3, 4, cldCol);
+      gfx->fillRoundRect(cx - 8, cy + 1, 18, 6, 3, cldCol);
+    } else {
+      // 2. Clear Night: Crescent moon
+      const uint16_t moonCol = 0xFFF4; // Pale radiant moon glow
+      gfx->fillCircle(cx - 1, cy, 8, moonCol);
+      gfx->fillCircle(cx + 3, cy - 3, 7, COL_BG); // Crescent cut
+    }
+
+  } else if (cond.indexOf("sun") >= 0 || cond.indexOf("clear") >= 0) {
+    // 3. Sunny / Clear Day: Bright yellow sun with radiant rays
     const uint16_t sunCol = 0xFDE0;
     gfx->fillCircle(cx, cy, 7, sunCol);
     const int8_t r1 = 9;
@@ -733,6 +765,21 @@ static void drawTopHUD() {
   gfx->fillRect(0, 0, SCREEN_W, Y_HORIZON, COL_BG);
   gfx->drawFastHLine(12, Y_HORIZON - 1, SCREEN_W - 24, COL_CARD_LINE);
 
+  if (g_maneuver == "reroute" || g_maneuver == "re-route") {
+    gfx->setFont(&SFCompactBold16pt7b);
+    gfx->setTextColor(0x077F); // Electric cyan
+    gfx->setCursor(20, 38);
+    gfx->print("RE-ROUTING...");
+
+    gfx->setFont(&SFCompactBold12pt7b);
+    gfx->setTextColor(COL_DIM_WHITE);
+    gfx->setCursor(20, 64);
+    gfx->print("Finding new route...");
+
+    drawWeatherWidget(332, 20);
+    return;
+  }
+
   // Large distance digits & prominent street name (starting at x=20 for clean left-alignment)
   String distStr = g_distance.length() > 0 ? g_distance : "0 m";
   String streetStr = g_street.length() > 0 ? g_street : "Route";
@@ -757,7 +804,8 @@ static void drawTopHUD() {
 // ===================== Turn Warning Strobe LED =====================
 // Flashes a double-blink green strobe at top-center when turn distance is < 50m
 static void drawTurnIndicatorLED() {
-  if (g_maneuver.length() == 0 || g_maneuver == "clear" || g_maneuver == "end" || g_maneuver == "straight") {
+  if (g_maneuver.length() == 0 || g_maneuver == "clear" || g_maneuver == "end" ||
+      g_maneuver == "straight" || g_maneuver == "reroute" || g_maneuver == "re-route") {
     return;
   }
 
@@ -802,7 +850,7 @@ static void drawTurnIndicatorLED() {
 // ===================== Route Distance Remaining Floating HUD =====================
 // Positioned at bottom-right, just above the bottom HUD deck (Y_BOTTOM_HUD = 386)
 static void drawRouteDistanceHUD() {
-  if (g_navTotalDist.length() == 0) return;
+  if (g_navTotalDist.length() == 0 || g_maneuver == "reroute" || g_maneuver == "re-route") return;
 
   int16_t x1, y1;
   uint16_t textW, textH;
@@ -901,6 +949,23 @@ void screen_map_draw() {
 
   // 4. Render floating maneuver arrow card (top-left, just below top bar)
   drawFloatingManeuverCard();
+
+  // If rerouting, display prominent floating banner in viewport
+  if (g_maneuver == "reroute" || g_maneuver == "re-route") {
+    const int16_t bW = 240;
+    const int16_t bH = 46;
+    const int16_t bX = CX - (bW / 2);
+    const int16_t bY = 200;
+    gfx->fillRoundRect(bX, bY, bW, bH, 12, 0x0841);
+    gfx->drawRoundRect(bX, bY, bW, bH, 12, 0x077F);
+    gfx->setFont(&SFCompactBold16pt7b);
+    int16_t x1, y1;
+    uint16_t tw, th;
+    gfx->getTextBounds("RE-ROUTING...", 0, 0, &x1, &y1, &tw, &th);
+    gfx->setTextColor(0x077F);
+    gfx->setCursor(CX - (tw / 2) - x1, bY + 31);
+    gfx->print("RE-ROUTING...");
+  }
 
   // 5. Render top center flashing turn indicator (<50m)
   drawTurnIndicatorLED();
