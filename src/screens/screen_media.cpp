@@ -1,5 +1,5 @@
 /*
- * screen_media.cpp — Music Playback Control Screen Component (SCR_MEDIA)
+ * screen_media.cpp - Music Playback Control Screen Component (SCR_MEDIA)
  */
 
 #include "screen_media.h"

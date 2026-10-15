@@ -1,0 +1,2906 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Drive Assistant - Komoot Navigation</title>
+  <link rel="stylesheet" href="leaflet.css" />
+  <script src="leaflet.js"></script>
+  <style>
+    * {
+      box-sizing: border-box;
+      -webkit-tap-highlight-color: transparent;
+      font-family: "Gotham Rounded", "Gotham Rounded Regular", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      font-weight: 400;
+    }
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #F0F2F5;
+      color: #2E3033;
+    }
+    #map {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 1;
+    }
+
+    /* ====== TOP FLOATING BAR ====== */
+    #top-bar {
+      position: absolute;
+      top: 12px;
+      left: 12px;
+      right: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      z-index: 500;
+      pointer-events: none;
+    }
+    .top-bar-left, .top-bar-right {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      pointer-events: auto;
+    }
+    .btn-plan-route {
+      height: 40px;
+      padding: 0 16px;
+      border-radius: 20px;
+      background: #FFFFFF;
+      color: #2E3033;
+      font-size: 13px;
+      font-weight: 700;
+      border: 1px solid rgba(0, 0, 0, 0.08);
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      transition: transform 0.15s, background 0.15s;
+    }
+    .btn-plan-route:active {
+      transform: scale(0.96);
+      background: #F9FAFB;
+    }
+    .btn-plan-route svg {
+      color: #74A72E;
+    }
+
+    /* ====== TOP ROUTE PLANNER CARD / MODAL ====== */
+    #planner-card {
+      position: absolute;
+      top: 12px;
+      left: 12px;
+      right: 12px;
+      background: #FFFFFF;
+      border-radius: 20px;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.18), 0 2px 8px rgba(0, 0, 0, 0.06);
+      z-index: 700;
+      padding: 14px 16px 16px 16px;
+      transform: translateY(-140%);
+      opacity: 0;
+      pointer-events: none;
+      transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.25s ease;
+      max-height: calc(100vh - 24px);
+      overflow-y: auto;
+      box-sizing: border-box;
+    }
+    #planner-card.open {
+      transform: translateY(0);
+      opacity: 1;
+      pointer-events: auto;
+    }
+
+    /* Route Tabs Bar & Saved/Recent Routes */
+    .route-tabs-bar {
+      display: flex;
+      background: #F3F4F6;
+      border-radius: 12px;
+      padding: 3px;
+      margin-top: 12px;
+      gap: 4px;
+    }
+    .route-tab-pill {
+      flex: 1;
+      border: none;
+      background: transparent;
+      padding: 7px 10px;
+      border-radius: 9px;
+      font-size: 11px;
+      font-weight: 700;
+      color: #6B7280;
+      cursor: pointer;
+      transition: all 0.18s ease;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 5px;
+    }
+    .route-tab-pill.active {
+      background: #FFFFFF;
+      color: #1F2937;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.08);
+    }
+    .routes-list-wrap {
+      margin-top: 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 7px;
+      max-height: 220px;
+      overflow-y: auto;
+      padding-right: 2px;
+    }
+    .route-item-card {
+      display: flex;
+      align-items: center;
+      background: #F9FAFB;
+      border: 1px solid #E5E7EB;
+      border-radius: 12px;
+      padding: 8px 10px;
+      gap: 8px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .route-item-card:active {
+      background: #F3F4F6;
+      transform: scale(0.98);
+    }
+    .route-item-icon {
+      font-size: 13px;
+      color: #74A72E;
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+    }
+    .route-item-body {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    .route-item-endpoints {
+      font-size: 12px;
+      font-weight: 700;
+      color: #1F2937;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .route-item-meta {
+      font-size: 10px;
+      font-weight: 600;
+      color: #6B7280;
+      display: flex;
+      gap: 5px;
+      align-items: center;
+    }
+    .route-item-actions {
+      display: flex;
+      align-items: center;
+      gap: 3px;
+      flex-shrink: 0;
+    }
+    .route-act-btn {
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      border: none;
+      background: transparent;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #9CA3AF;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      font-size: 14px;
+      padding: 0;
+    }
+    .route-act-btn.starred {
+      color: #F59E0B;
+    }
+    .route-act-btn:hover, .route-act-btn:active {
+      background: #E5E7EB;
+    }
+    .route-act-btn.starred:hover, .route-act-btn.starred:active {
+      background: #FEF3C7;
+    }
+    .empty-routes-msg {
+      text-align: center;
+      font-size: 11px;
+      font-weight: 600;
+      color: #9CA3AF;
+      padding: 16px 8px;
+    }
+    .btn-add-curr-fav {
+      margin-top: 8px;
+      padding: 7px 12px;
+      background: #FEF3C7;
+      border: 1px solid #FDE68A;
+      border-radius: 10px;
+      font-size: 11px;
+      font-weight: 700;
+      color: #B45309;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .btn-add-curr-fav:active {
+      transform: scale(0.97);
+      background: #FDE68A;
+    }
+    .planner-modal-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 12px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid #F3F4F6;
+    }
+    .planner-modal-title {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      font-size: 15px;
+      font-weight: 700;
+      color: #1F2937;
+    }
+    .planner-modal-title svg {
+      color: #74A72E;
+    }
+    .btn-close-planner {
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      background: #F3F4F6;
+      border: 1px solid #E5E7EB;
+      color: #6B7280;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .btn-close-planner:active {
+      background: #E5E7EB;
+      color: #111827;
+      transform: scale(0.94);
+    }
+
+    .komoot-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 10px;
+    }
+    .komoot-brand {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 14px;
+      font-weight: 700;
+      color: #2E3033;
+      letter-spacing: -0.2px;
+    }
+    .komoot-badge {
+      background: #74A72E; /* Komoot Leaf Green */
+      color: #FFFFFF;
+      font-size: 9px;
+      font-weight: 700;
+      padding: 2px 6px;
+      border-radius: 6px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .gpx-pill {
+      font-size: 11px;
+      font-weight: 700;
+      padding: 5px 9px;
+      border-radius: 20px;
+      background: #F3F4F6;
+      color: #374151;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      cursor: pointer;
+      border: 1px solid #E5E7EB;
+      transition: background 0.15s;
+    }
+    .gpx-pill:active {
+      background: #E5E7EB;
+    }
+    .bt-pill {
+      font-size: 11px;
+      font-weight: 600;
+      padding: 5px 10px;
+      border-radius: 20px;
+      background: #F3F4F6;
+      color: #4B5563;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .bt-pill.connected {
+      background: #EBF5E0;
+      color: #3B7018;
+    }
+    .bt-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: #9CA3AF;
+    }
+    .bt-pill.connected .bt-dot {
+      background: #74A72E;
+      box-shadow: 0 0 6px #74A72E;
+    }
+
+    /* Waypoints Rows */
+    .waypoint-container {
+      position: relative;
+    }
+    .waypoint-row {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      margin-bottom: 8px;
+    }
+    .waypoint-dot {
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 11px;
+      font-weight: 700;
+      color: #FFFFFF;
+      flex-shrink: 0;
+      margin-top: 2px;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.15);
+    }
+    .dot-start {
+      background: #74A72E; /* Komoot Green */
+    }
+    .dot-dest {
+      background: #E53935; /* Destination Red */
+    }
+    .waypoint-content {
+      flex: 1;
+      min-width: 0;
+    }
+    .waypoint-label {
+      font-size: 10px;
+      font-weight: 700;
+      color: #8C939D;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 2px;
+    }
+    .waypoint-text {
+      font-size: 13px;
+      font-weight: 600;
+      color: #1F2937;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      margin-bottom: 6px;
+      cursor: pointer;
+    }
+    .waypoint-chips {
+      display: flex;
+      gap: 5px;
+      flex-wrap: wrap;
+    }
+    .chip-btn {
+      background: #F3F4F6;
+      color: #374151;
+      font-size: 10px;
+      font-weight: 600;
+      padding: 4px 8px;
+      border-radius: 8px;
+      border: 1px solid #E5E7EB;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      transition: background 0.15s;
+    }
+    .chip-btn:active {
+      background: #E5E7EB;
+    }
+
+    /* ====== SVG PIN ICONS & CENTER PIN FOR "CHOOSE ON MAP" ====== */
+    .custom-svg-marker {
+      background: transparent !important;
+      border: none !important;
+    }
+    #center-pin-container {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -100%);
+      pointer-events: none;
+      z-index: 650;
+      display: none;
+      flex-direction: column;
+      align-items: center;
+    }
+    #center-pin-svg-wrap {
+      width: 36px;
+      height: 48px;
+      transition: transform 0.16s ease-out;
+    }
+    #center-pin-container.floating #center-pin-svg-wrap {
+      transform: translateY(-10px);
+    }
+    .pin-shadow {
+      width: 14px;
+      height: 5px;
+      background: rgba(0, 0, 0, 0.35);
+      border-radius: 50%;
+      margin-top: -3px;
+      transition: transform 0.16s ease-out, opacity 0.16s ease-out;
+    }
+    #center-pin-container.floating .pin-shadow {
+      transform: scale(0.65);
+      opacity: 0.4;
+    }
+
+    #pin-confirm-card {
+      position: absolute;
+      bottom: 24px;
+      left: 16px;
+      right: 16px;
+      background: #FFFFFF;
+      border-radius: 20px;
+      box-shadow: 0 6px 28px rgba(0, 0, 0, 0.16);
+      padding: 14px 16px;
+      z-index: 600;
+      display: none;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .pin-address-text {
+      font-size: 13px;
+      font-weight: 600;
+      color: #1F2937;
+      text-align: center;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .pin-buttons-row {
+      display: flex;
+      gap: 8px;
+    }
+    .btn-confirm-pin {
+      flex: 1;
+      height: 44px;
+      border-radius: 22px;
+      background: #74A72E;
+      color: #FFFFFF;
+      font-size: 13px;
+      font-weight: 700;
+      border: none;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      box-shadow: 0 3px 10px rgba(116, 167, 46, 0.35);
+    }
+    .btn-cancel-pin {
+      width: 80px;
+      height: 44px;
+      border-radius: 22px;
+      background: #F3F4F6;
+      color: #4B5563;
+      font-size: 12px;
+      font-weight: 600;
+      border: 1px solid #E5E7EB;
+      cursor: pointer;
+    }
+
+    /* ====== FLOATING GPS RECENTER BUTTON ====== */
+    #btn-recenter {
+      position: absolute;
+      right: 16px;
+      bottom: 110px;
+      width: 46px;
+      height: 46px;
+      border-radius: 50%;
+      background: #FFFFFF;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.14);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 450;
+      cursor: pointer;
+      border: none;
+      transition: transform 0.15s;
+    }
+    #btn-recenter:active {
+      transform: scale(0.92);
+    }
+
+    /* ====== BOTTOM ROUTE SUMMARY SHEET ====== */
+    #bottom-nav-sheet {
+      position: absolute;
+      left: 12px;
+      right: 12px;
+      bottom: 16px;
+      background: #FFFFFF;
+      border-radius: 22px;
+      box-shadow: 0 6px 30px rgba(0, 0, 0, 0.18);
+      z-index: 550;
+      padding: 16px;
+      display: none;
+      flex-direction: column;
+      gap: 12px;
+      transition: transform 0.3s ease;
+    }
+    .sheet-stats-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .stat-main {
+      display: flex;
+      align-items: baseline;
+      gap: 6px;
+    }
+    .stat-dist {
+      font-size: 26px;
+      font-weight: 700;
+      color: #2E3033;
+      letter-spacing: -0.5px;
+    }
+    .stat-duration {
+      font-size: 15px;
+      font-weight: 600;
+      color: #6B7280;
+    }
+    .sheet-profile-pill {
+      background: #F3F4F6;
+      padding: 4px 10px;
+      border-radius: 12px;
+      font-size: 11px;
+      font-weight: 700;
+      color: #4B5563;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .sheet-actions-right {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .btn-fav-route {
+      width: 34px;
+      height: 34px;
+      border-radius: 50%;
+      background: #F3F4F6;
+      border: 1px solid #E5E7EB;
+      color: #6B7280;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .btn-fav-route.active {
+      background: #FEF3C7;
+      border-color: #FDE68A;
+      color: #F59E0B;
+    }
+    .btn-fav-route:active {
+      transform: scale(0.94);
+    }
+    .btn-reset-route {
+      width: 34px;
+      height: 34px;
+      border-radius: 50%;
+      background: #F3F4F6;
+      border: 1px solid #E5E7EB;
+      color: #4B5563;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .btn-reset-route:hover, .btn-reset-route:active {
+      background: #FEE2E2;
+      color: #DC2626;
+      border-color: #FECACA;
+      transform: scale(0.94);
+    }
+    .maneuver-preview-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      background: #F9FAFB;
+      padding: 8px 12px;
+      border-radius: 12px;
+      border: 1px solid #F3F4F6;
+    }
+    .maneuver-icon-badge {
+      font-size: 20px;
+      color: #74A72E;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .maneuver-text {
+      font-size: 12px;
+      font-weight: 600;
+      color: #1F2937;
+      flex: 1;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .btn-start-nav {
+      height: 48px;
+      border-radius: 24px;
+      background: #74A72E;
+      color: #FFFFFF;
+      font-size: 14px;
+      font-weight: 700;
+      border: none;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      box-shadow: 0 4px 14px rgba(116, 167, 46, 0.4);
+      letter-spacing: 0.2px;
+    }
+
+    /* ====== ROUTE SIMULATION CARD (DEBUG MODE) ====== */
+    .sim-card {
+      background: #F8FAFC;
+      border: 1px solid #E2E8F0;
+      border-radius: 16px;
+      padding: 10px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .sim-header-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .sim-tag {
+      font-size: 11px;
+      font-weight: 700;
+      color: #334155;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+    .sim-speed-chips {
+      display: flex;
+      gap: 4px;
+    }
+    .sim-speed-chip {
+      background: #FFFFFF;
+      border: 1px solid #CBD5E1;
+      padding: 3px 8px;
+      border-radius: 10px;
+      font-size: 10px;
+      font-weight: 700;
+      color: #475569;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .sim-speed-chip.active {
+      background: #0F172A;
+      color: #FFFFFF;
+      border-color: #0F172A;
+    }
+    .btn-sim-action {
+      height: 38px;
+      border-radius: 19px;
+      background: #0F172A;
+      color: #FFFFFF;
+      font-size: 12px;
+      font-weight: 700;
+      border: none;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      box-shadow: 0 2px 8px rgba(15, 23, 42, 0.25);
+    }
+    .btn-sim-action:active {
+      transform: scale(0.98);
+    }
+
+    /* In-Ride Simulation Indicator Badge */
+    .hud-sim-tag {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      background: #FEF3C7;
+      border: 1px solid #FDE68A;
+      padding: 4px 8px;
+      border-radius: 10px;
+      font-size: 11px;
+      font-weight: 700;
+      color: #92400E;
+      cursor: pointer;
+    }
+    .sim-pulse-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: #D97706;
+      animation: pulse 1s infinite alternate;
+    }
+
+    /* ====== IN-RIDE TURN-BY-TURN NAVIGATION HUD (GOOGLE MAPS / KOMOOT STYLE) ====== */
+    #active-nav-hud {
+      position: absolute;
+      top: 12px;
+      left: 12px;
+      right: 12px;
+      background: #111827; /* Midnight Slate Dark */
+      color: #FFFFFF;
+      border-radius: 20px;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+      z-index: 700;
+      padding: 14px 16px;
+      display: none;
+      flex-direction: column;
+      gap: 8px;
+      animation: slideDown 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    @keyframes slideDown {
+      from { transform: translateY(-100%); opacity: 0; }
+      to { transform: translateY(0); opacity: 1; }
+    }
+
+    .nav-hud-main {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+    .nav-turn-icon-box {
+      width: 54px;
+      height: 54px;
+      border-radius: 14px;
+      background: #1E293B;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #4ADE80; /* Vibrant Neon Green */
+      flex-shrink: 0;
+    }
+    .nav-turn-info {
+      flex: 1;
+      min-width: 0;
+    }
+    .nav-dist-countdown {
+      font-size: 26px;
+      font-weight: 800;
+      color: #FFFFFF;
+      line-height: 1.1;
+      letter-spacing: -0.3px;
+    }
+    .nav-street-name {
+      font-size: 14px;
+      font-weight: 600;
+      color: #E2E8F0;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      margin-top: 3px;
+    }
+    .nav-next-preview {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(255, 255, 255, 0.08);
+      padding: 4px 10px;
+      border-radius: 10px;
+      font-size: 11px;
+      color: #94A3B8;
+      width: fit-content;
+    }
+
+    /* Bottom Active Nav HUD */
+    #active-nav-bottom {
+      position: absolute;
+      left: 12px;
+      right: 12px;
+      bottom: 16px;
+      background: #FFFFFF;
+      border-radius: 22px;
+      box-shadow: 0 6px 30px rgba(0, 0, 0, 0.2);
+      z-index: 700;
+      padding: 12px 16px;
+      display: none;
+      align-items: center;
+      justify-content: space-between;
+      animation: slideUp 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    @keyframes slideUp {
+      from { transform: translateY(100%); opacity: 0; }
+      to { transform: translateY(0); opacity: 1; }
+    }
+
+    .nav-bottom-trip {
+      display: flex;
+      flex-direction: column;
+    }
+    .nav-bottom-eta {
+      font-size: 19px;
+      font-weight: 800;
+      color: #111827;
+      letter-spacing: -0.3px;
+    }
+    .nav-bottom-sub {
+      font-size: 12px;
+      font-weight: 600;
+      color: #64748B;
+    }
+    .nav-speed-badge {
+      background: #F1F5F9;
+      border: 1px solid #E2E8F0;
+      padding: 6px 12px;
+      border-radius: 14px;
+      font-size: 12px;
+      font-weight: 700;
+      color: #1E293B;
+      text-align: center;
+    }
+    .btn-exit-ride {
+      height: 40px;
+      padding: 0 16px;
+      border-radius: 20px;
+      background: #EF4444;
+      color: #FFFFFF;
+      font-size: 13px;
+      font-weight: 700;
+      border: none;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      box-shadow: 0 3px 10px rgba(239, 68, 68, 0.35);
+    }
+
+    /* Leaflet Control Overrides */
+    .leaflet-control-zoom {
+      border: none !important;
+      box-shadow: 0 4px 14px rgba(0,0,0,0.12) !important;
+      border-radius: 12px !important;
+      overflow: hidden;
+      margin-right: 16px !important;
+      margin-top: 140px !important;
+    }
+    /* ====== SETTINGS PILL & CARD ====== */
+    .settings-pill {
+      height: 40px;
+      width: 40px;
+      border-radius: 20px;
+      background: #FFFFFF;
+      color: #374151;
+      border: 1px solid rgba(0, 0, 0, 0.08);
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      transition: transform 0.15s, background 0.15s;
+    }
+    .settings-pill:active {
+      transform: scale(0.95);
+      background: #F3F4F6;
+    }
+
+    #settings-card {
+      position: absolute;
+      top: 12px;
+      left: 12px;
+      right: 12px;
+      background: #FFFFFF;
+      border-radius: 20px;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.18), 0 2px 8px rgba(0, 0, 0, 0.06);
+      z-index: 750;
+      padding: 16px;
+      transform: translateY(-140%);
+      opacity: 0;
+      pointer-events: none;
+      transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.25s ease;
+      max-height: calc(100vh - 24px);
+      overflow-y: auto;
+      box-sizing: border-box;
+    }
+    #settings-card.open {
+      transform: translateY(0);
+      opacity: 1;
+      pointer-events: auto;
+    }
+    .settings-section {
+      margin-top: 14px;
+      padding-top: 14px;
+      border-top: 1px solid #F3F4F6;
+    }
+    .settings-section-title {
+      font-size: 13px;
+      font-weight: 700;
+      color: #111827;
+      margin-bottom: 3px;
+    }
+    .settings-section-desc {
+      font-size: 11px;
+      color: #6B7280;
+      margin-bottom: 10px;
+      line-height: 1.4;
+    }
+    .setting-segmented {
+      display: flex;
+      background: #F3F4F6;
+      border-radius: 12px;
+      padding: 3px;
+      gap: 4px;
+    }
+    .setting-segmented-btn {
+      flex: 1;
+      border: none;
+      background: transparent;
+      padding: 8px 10px;
+      border-radius: 9px;
+      font-size: 12px;
+      font-weight: 700;
+      color: #6B7280;
+      cursor: pointer;
+      transition: all 0.18s ease;
+      text-align: center;
+    }
+    .setting-segmented-btn.active {
+      background: #FFFFFF;
+      color: #111827;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.08);
+    }
+    .btn-select-region {
+      width: 100%;
+      height: 44px;
+      border-radius: 14px;
+      background: #111827;
+      color: #FFFFFF;
+      font-size: 13px;
+      font-weight: 700;
+      border: none;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      box-shadow: 0 3px 10px rgba(17, 24, 39, 0.2);
+    }
+    .btn-select-region:active {
+      transform: scale(0.98);
+    }
+    .storage-card {
+      background: #F9FAFB;
+      border: 1px solid #E5E7EB;
+      border-radius: 14px;
+      padding: 10px 12px;
+      margin-top: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .storage-info-title {
+      font-size: 11px;
+      color: #6B7280;
+      font-weight: 600;
+    }
+    .storage-info-val {
+      font-size: 13px;
+      color: #111827;
+      font-weight: 700;
+    }
+    .btn-clear-tiles {
+      border: 1px solid #FCA5A5;
+      background: #FEF2F2;
+      color: #DC2626;
+      padding: 6px 10px;
+      border-radius: 10px;
+      font-size: 11px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .saved-regions-wrap {
+      margin-top: 6px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      max-height: 160px;
+      overflow-y: auto;
+    }
+    .saved-region-card {
+      background: #F9FAFB;
+      border: 1px solid #E5E7EB;
+      border-radius: 12px;
+      padding: 8px 10px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .saved-region-name {
+      font-size: 12px;
+      font-weight: 700;
+      color: #1F2937;
+    }
+    .saved-region-meta {
+      font-size: 10px;
+      color: #6B7280;
+      font-weight: 600;
+      margin-top: 2px;
+    }
+    .saved-region-actions {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .btn-region-view {
+      padding: 4px 8px;
+      background: #FFFFFF;
+      border: 1px solid #D1D5DB;
+      border-radius: 8px;
+      font-size: 10px;
+      font-weight: 700;
+      color: #374151;
+      cursor: pointer;
+    }
+    .btn-region-delete {
+      padding: 4px 8px;
+      background: #FEE2E2;
+      border: 1px solid #FECACA;
+      border-radius: 8px;
+      font-size: 10px;
+      font-weight: 700;
+      color: #DC2626;
+      cursor: pointer;
+    }
+    .region-name-input {
+      width: 100%;
+      height: 38px;
+      border-radius: 12px;
+      border: 1px solid #D1D5DB;
+      padding: 0 12px;
+      font-size: 12px;
+      font-weight: 600;
+      color: #1F2937;
+      background: #F9FAFB;
+      box-sizing: border-box;
+      outline: none;
+    }
+    .region-name-input:focus {
+      border-color: #74A72E;
+      background: #FFFFFF;
+    }
+
+    /* ====== REGION DOWNLOAD FRAMING OVERLAY & BAR ====== */
+    #region-guide-banner {
+      position: absolute;
+      top: 16px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(17, 24, 39, 0.9);
+      backdrop-filter: blur(8px);
+      color: #FFFFFF;
+      padding: 8px 18px;
+      border-radius: 20px;
+      font-size: 12px;
+      font-weight: 700;
+      z-index: 600;
+      display: none;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+      pointer-events: none;
+      white-space: nowrap;
+    }
+    #region-frame-overlay {
+      position: absolute;
+      top: 70px;
+      bottom: 170px;
+      left: 20px;
+      right: 20px;
+      border: 2.5px dashed #74A72E;
+      border-radius: 20px;
+      box-shadow: 0 0 0 9999px rgba(15, 23, 42, 0.38);
+      z-index: 400;
+      pointer-events: none;
+      display: none;
+    }
+    #region-frame-bar {
+      position: absolute;
+      left: 12px;
+      right: 12px;
+      bottom: 16px;
+      background: #FFFFFF;
+      border-radius: 22px;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.22);
+      z-index: 650;
+      padding: 16px;
+      display: none;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .region-stats-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .region-tag-main {
+      font-size: 14px;
+      font-weight: 700;
+      color: #111827;
+    }
+    .region-tag-sub {
+      font-size: 11px;
+      color: #6B7280;
+      font-weight: 600;
+    }
+    .region-est-badge {
+      background: #ECFDF5;
+      border: 1px solid #A7F3D0;
+      color: #065F46;
+      padding: 5px 10px;
+      border-radius: 12px;
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .region-est-badge.warn {
+      background: #FEF2F2;
+      border-color: #FECACA;
+      color: #991B1B;
+    }
+    .region-buttons-row {
+      display: flex;
+      gap: 8px;
+    }
+    .btn-download-action {
+      flex: 1;
+      height: 46px;
+      border-radius: 23px;
+      background: #74A72E;
+      color: #FFFFFF;
+      font-size: 13px;
+      font-weight: 700;
+      border: none;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      box-shadow: 0 4px 14px rgba(116, 167, 46, 0.35);
+    }
+    .btn-download-action:disabled {
+      background: #9CA3AF;
+      box-shadow: none;
+      cursor: not-allowed;
+    }
+    .btn-cancel-region {
+      width: 80px;
+      height: 46px;
+      border-radius: 23px;
+      background: #F3F4F6;
+      color: #4B5563;
+      font-size: 12px;
+      font-weight: 700;
+      border: 1px solid #E5E7EB;
+      cursor: pointer;
+    }
+    .progress-bar-track {
+      width: 100%;
+      height: 8px;
+      background: #E5E7EB;
+      border-radius: 4px;
+      overflow: hidden;
+    }
+    .progress-bar-fill {
+      height: 100%;
+      background: #74A72E;
+      border-radius: 4px;
+      width: 0%;
+      transition: width 0.15s ease;
+    }
+    .progress-label-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 11px;
+      font-weight: 700;
+      color: #4B5563;
+    }
+    .btn-cancel-prog {
+      border: none;
+      background: transparent;
+      color: #DC2626;
+      font-size: 11px;
+      font-weight: 700;
+      cursor: pointer;
+      padding: 0;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- OpenStreetMap Outdoor Tile Container -->
+  <div id="map"></div>
+
+  <!-- ====== TOP FLOATING APP BAR ====== -->
+  <div id="top-bar">
+    <div class="top-bar-left">
+      <button id="btn-plan-route" class="btn-plan-route" onclick="openRoutePlanner()">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="6" cy="19" r="3"></circle>
+          <path d="M9 19h8.5a4.5 4.5 0 0 0 0-9H7a3 3 0 0 1 0-6h11"></path>
+          <polyline points="15 1 18 4 15 7"></polyline>
+        </svg>
+        <span>Plan Route</span>
+      </button>
+    </div>
+    <div class="top-bar-right">
+      <div class="gpx-pill" onclick="triggerGpxImport()" title="Import GPX Track">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
+        <span>GPX</span>
+      </div>
+      <div id="bt-pill" class="bt-pill" onclick="triggerBluetoothConnect()">
+        <span class="bt-dot"></span>
+        <span id="bt-status-text">AMOLED</span>
+      </div>
+      <div id="settings-pill" class="settings-pill" onclick="openSettingsModal()" title="Settings">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="3"></circle>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+        </svg>
+      </div>
+    </div>
+  </div>
+
+  <!-- ====== SETTINGS MODAL ====== -->
+  <div id="settings-card">
+    <div class="planner-modal-header">
+      <div class="planner-modal-title">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#2E3033" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="3"></circle>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+        </svg>
+        <span>Settings</span>
+      </div>
+      <button class="btn-close-planner" onclick="closeSettingsModal()" title="Close Settings">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="18" y1="6" x2="6" y2="18"></line>
+          <line x1="6" y1="6" x2="18" y2="18"></line>
+        </svg>
+      </button>
+    </div>
+
+    <!-- Section 1: Route Calculation -->
+    <div class="settings-section" style="margin-top: 8px; padding-top: 8px; border-top: none;">
+      <div class="settings-section-title">1. Route Calculation</div>
+      <div class="settings-section-desc">Choose whether routing uses online servers or local offline calculation.</div>
+      <div class="setting-segmented">
+        <button id="btn-mode-online" class="setting-segmented-btn active" onclick="selectRoutingMode(false)">Online (OSRM)</button>
+        <button id="btn-mode-offline" class="setting-segmented-btn" onclick="selectRoutingMode(true)">Offline (Local)</button>
+      </div>
+      <div id="routing-mode-note" style="margin-top: 8px; font-size: 11px; color: #4B5563; background: #F9FAFB; padding: 8px 10px; border-radius: 10px; border: 1px solid #F3F4F6;">
+        Online uses live OSRM routing with complete road geometry. If network is lost, it automatically falls back to offline calculation.
+      </div>
+    </div>
+
+    <!-- Section 2: Region Download -->
+    <div class="settings-section">
+      <div class="settings-section-title">2. Map Region Download</div>
+      <div class="settings-section-desc">Drag and zoom the map to frame and pre-save map regions for offline use without cellular data.</div>
+      <button class="btn-select-region" onclick="enterRegionDownloadMode()">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="10"></circle>
+          <line x1="2" y1="12" x2="22" y2="12"></line>
+          <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path>
+        </svg>
+        <span>Select Visible Region to Download</span>
+      </button>
+      <div class="storage-card">
+        <div>
+          <div class="storage-info-title">Offline Map Storage</div>
+          <div class="storage-info-val"><span id="offline-storage-tiles">0</span> tiles (<span id="offline-storage-mb">0.0 MB</span>)</div>
+        </div>
+        <button class="btn-clear-tiles" onclick="clearOfflineTiles()">Clear Cache</button>
+      </div>
+
+      <!-- Saved Offline Regions List -->
+      <div id="saved-regions-container" style="margin-top: 10px;">
+        <div style="font-size: 11px; font-weight: 700; color: #4B5563; margin-bottom: 4px;">Saved Regions:</div>
+        <div id="saved-regions-list" class="saved-regions-wrap"></div>
+      </div>
+    </div>
+
+    <!-- Section 3: Device & Display Preferences -->
+    <div class="settings-section">
+      <div class="settings-section-title">3. Display & Navigation</div>
+      <div class="settings-section-desc">Screen awake status, measurement units, and map recenter behavior.</div>
+      
+      <!-- Keep Screen Awake -->
+      <div style="font-size: 12px; font-weight: 700; color: #374151; margin-bottom: 4px;">Keep Screen Awake</div>
+      <div class="setting-segmented">
+        <button id="btn-screen-awake" class="setting-segmented-btn active" onclick="selectKeepScreenOn(true)">Keep Awake</button>
+        <button id="btn-screen-normal" class="setting-segmented-btn" onclick="selectKeepScreenOn(false)">Normal Timeout</button>
+      </div>
+
+      <!-- Measurement Units -->
+      <div style="font-size: 12px; font-weight: 700; color: #374151; margin: 10px 0 4px 0;">Units</div>
+      <div class="setting-segmented">
+        <button id="btn-units-metric" class="setting-segmented-btn active" onclick="selectUnits('metric')">Metric (km/h, km)</button>
+        <button id="btn-units-imperial" class="setting-segmented-btn" onclick="selectUnits('imperial')">Imperial (mph, mi)</button>
+      </div>
+
+      <!-- Auto-Recenter Timer -->
+      <div style="font-size: 12px; font-weight: 700; color: #374151; margin: 10px 0 4px 0;">Auto-Recenter Map</div>
+      <div class="setting-segmented">
+        <button id="btn-recenter-10s" class="setting-segmented-btn active" onclick="selectAutoRecenter(true)">10 Seconds</button>
+        <button id="btn-recenter-off" class="setting-segmented-btn" onclick="selectAutoRecenter(false)">Off (Manual)</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ====== TOP ROUTE PLANNER MODAL ====== -->
+  <div id="planner-card">
+    <div class="planner-modal-header">
+      <div class="planner-modal-title">
+        <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="#2E3033" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="6" cy="19" r="3"></circle>
+          <path d="M9 19h8.5a4.5 4.5 0 0 0 0-9H7a3 3 0 0 1 0-6h11"></path>
+          <polyline points="15 1 18 4 15 7"></polyline>
+        </svg>
+        <span>Plan Route</span>
+      </div>
+      <button class="btn-close-planner" onclick="closeRoutePlanner()" title="Close Planner">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="18" y1="6" x2="6" y2="18"></line>
+          <line x1="6" y1="6" x2="18" y2="18"></line>
+        </svg>
+      </button>
+    </div>
+
+    <!-- Waypoints Box -->
+    <div class="waypoint-container">
+      
+      <!-- 1. Start Point (A) -->
+      <div class="waypoint-row">
+        <div class="waypoint-dot dot-start">A</div>
+        <div class="waypoint-content">
+          <div class="waypoint-label">Starting Position</div>
+          <div id="start-label" class="waypoint-text" onclick="showSearchModal(true)">Bogo City Center</div>
+          <div class="waypoint-chips">
+            <button class="chip-btn" onclick="useCurrentLocation(true)">🎯 Current Location</button>
+            <button class="chip-btn" onclick="showSearchModal(true)">🔍 Search</button>
+            <button class="chip-btn" onclick="startPinMode('start')">📍 On Map</button>
+          </div>
+        </div>
+      </div>
+
+      <div style="height: 1px; background: #F3F4F6; margin: 8px 0 10px 32px;"></div>
+
+      <!-- 2. Destination (B) -->
+      <div class="waypoint-row">
+        <div class="waypoint-dot dot-dest">B</div>
+        <div class="waypoint-content">
+          <div class="waypoint-label">Destination</div>
+          <div id="dest-label" class="waypoint-text" onclick="showSearchModal(false)">Choose destination...</div>
+          <div class="waypoint-chips">
+            <button class="chip-btn" onclick="useCurrentLocation(false)">🎯 Current Location</button>
+            <button class="chip-btn" onclick="showSearchModal(false)">🔍 Search</button>
+            <button class="chip-btn" onclick="startPinMode('dest')">📍 On Map</button>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Segmented Tabs for Previous Routes & Favorite Routes -->
+    <div class="route-tabs-bar">
+      <button id="tab-btn-recent" class="route-tab-pill active" onclick="switchRouteTab('recent')">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="10"></circle>
+          <polyline points="12 6 12 12 16 14"></polyline>
+        </svg>
+        <span id="tab-label-recent">Recent (0)</span>
+      </button>
+      <button id="tab-btn-fav" class="route-tab-pill" onclick="switchRouteTab('fav')">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1">
+          <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon>
+        </svg>
+        <span id="tab-label-fav">Favorites (0)</span>
+      </button>
+    </div>
+
+    <!-- Routes List Container -->
+    <div id="saved-routes-list" class="routes-list-wrap">
+      <!-- Populated dynamically via JS -->
+    </div>
+
+    <!-- Quick Button to Favorite the Current Route in Planner -->
+    <button id="btn-save-curr-fav" class="btn-add-curr-fav" onclick="addCurrentPlanToFavorite()" style="display:none;">
+      <span>★</span>
+      <span>Save Current Route to Favorites</span>
+    </button>
+  </div>
+
+  <!-- ====== IN-RIDE TURN-BY-TURN HUD (KOMOOT / GOOGLE MAPS STYLE) ====== -->
+  <div id="active-nav-hud">
+    <div class="nav-hud-main">
+      <div id="hud-turn-icon" class="nav-turn-icon-box">
+        <!-- SVG will be injected -->
+      </div>
+      <div class="nav-turn-info">
+        <div id="hud-maneuver-dist" class="nav-dist-countdown">In 250 m</div>
+        <div id="hud-maneuver-street" class="nav-street-name">Turn right onto Bogo-Medellin Rd</div>
+      </div>
+    </div>
+    <div id="hud-next-preview" class="nav-next-preview" style="display:none;">
+      <span>Then:</span>
+      <span id="hud-next-text">Straight 1.2 km</span>
+    </div>
+  </div>
+
+  <!-- ====== ACTIVE BOTTOM TRIP & SPEED HUD ====== -->
+  <div id="active-nav-bottom">
+    <div class="nav-bottom-trip">
+      <div id="hud-eta-val" class="nav-bottom-eta">ETA --:--</div>
+      <div id="hud-eta-sub" class="nav-bottom-sub">-- min • -- km</div>
+    </div>
+
+    <!-- Live Simulation Speed Switcher -->
+    <div id="hud-sim-indicator" class="hud-sim-tag" style="display:none;" onclick="cycleLiveSimSpeed()" title="Tap to change simulation speed">
+      <span class="sim-pulse-dot"></span>
+      <span id="hud-sim-label">Sim 50 km/h</span>
+      <span style="font-size:9px;">▼</span>
+    </div>
+
+    <div id="hud-speed-badge" class="nav-speed-badge">0 km/h</div>
+    <button class="btn-exit-ride" onclick="handleNavigationButton()">
+      <span>✕</span>
+      <span>Exit</span>
+    </button>
+  </div>
+
+  <!-- ====== CENTER PIN FOR "CHOOSE ON MAP" ====== -->
+  <div id="center-pin-container">
+    <div id="center-pin-svg-wrap"></div>
+    <div class="pin-shadow"></div>
+  </div>
+
+  <!-- Floating Center Pin Confirmation Pill -->
+  <div id="pin-confirm-card">
+    <div id="pin-address-label" class="pin-address-text">Move map to select place</div>
+    <div class="pin-buttons-row">
+      <button class="btn-cancel-pin" onclick="cancelPinMode()">Cancel</button>
+      <button id="btn-confirm-pin" class="btn-confirm-pin" onclick="confirmPinSelection()">
+        <span>✓</span>
+        <span id="btn-confirm-text">Set as Starting Point</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- ====== FLOATING RECENTER BUTTON ====== -->
+  <button id="btn-recenter" onclick="recenterOnUser()" title="My Location">
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#2E3033" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+      <polygon points="3 11 22 2 13 21 11 13 3 11"></polygon>
+    </svg>
+  </button>
+
+  <!-- ====== BOTTOM ROUTE SUMMARY SHEET ====== -->
+  <div id="bottom-nav-sheet">
+    <div class="sheet-stats-row">
+      <div class="stat-main">
+        <span id="sheet-distance" class="stat-dist">0 km</span>
+        <span id="sheet-duration" class="stat-duration">0 min</span>
+      </div>
+      <div class="sheet-actions-right">
+        <div id="sheet-offline-pill" class="sheet-profile-pill" style="display:none; background:#FEF3C7; color:#B45309; border:1px solid #FDE68A;">
+          <span>⚡ Offline</span>
+        </div>
+        <div class="sheet-profile-pill">
+          <span>🚗 Driving</span>
+        </div>
+        <button id="btn-fav-route" class="btn-fav-route" onclick="toggleCurrentRouteFavorite()" title="Save Route to Favorites">
+          <svg id="fav-star-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round">
+            <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon>
+          </svg>
+        </button>
+        <button id="btn-reset-route" class="btn-reset-route" onclick="resetRouteSelection()" title="Reset Route & Back to Map">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="18" y1="6" x2="6" y2="18"></line>
+            <line x1="6" y1="6" x2="18" y2="18"></line>
+          </svg>
+        </button>
+      </div>
+    </div>
+
+    <div class="maneuver-preview-row">
+      <span id="maneuver-icon" class="maneuver-icon-badge">↑</span>
+      <span id="maneuver-text" class="maneuver-text">Ready to calculate route</span>
+    </div>
+
+    <!-- Route Simulation for Debugging -->
+    <div class="sim-card">
+      <div class="sim-header-row">
+        <span class="sim-tag">🎮 Route Simulation</span>
+        <div class="sim-speed-chips">
+          <button class="sim-speed-chip" onclick="setSimSpeed(20, this)">20</button>
+          <button class="sim-speed-chip active" onclick="setSimSpeed(50, this)">50</button>
+          <button class="sim-speed-chip" onclick="setSimSpeed(100, this)">100</button>
+          <button class="sim-speed-chip" onclick="setSimSpeed(150, this)">150</button>
+        </div>
+      </div>
+      <button class="btn-sim-action" onclick="startSimulatedRide()">
+        <span>▶ Start Vehicle Simulation</span>
+      </button>
+    </div>
+
+    <button id="btn-main-nav" class="btn-start-nav" onclick="handleNavigationButton()">
+      <span id="nav-btn-icon">▶</span>
+      <span id="nav-btn-text">START NAVIGATION</span>
+    </button>
+  </div>
+
+  <!-- Guide Banner for Region Selection -->
+  <div id="region-guide-banner">Pan and zoom the map to frame the region</div>
+
+  <!-- Viewfinder Frame Overlay for Region Download -->
+  <div id="region-frame-overlay"></div>
+
+  <!-- Bottom Floating Card for Region Download -->
+  <div id="region-frame-bar">
+    <div class="region-stats-row">
+      <div>
+        <div class="region-tag-main">Download Visible Region</div>
+        <div class="region-tag-sub">Zooms 13 to 16 (Full street detail)</div>
+      </div>
+      <div id="region-est-badge" class="region-est-badge">Calculating...</div>
+    </div>
+    <div style="display: flex; gap: 8px; align-items: center;">
+      <input id="region-name-input" type="text" class="region-name-input" placeholder="Region Name (e.g. Bogo Area)" value="Bogo Area" />
+    </div>
+    <div id="region-action-buttons" class="region-buttons-row">
+      <button id="btn-start-download-region" class="btn-download-action" onclick="startRegionDownload()">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+          <polyline points="7 10 12 15 17 10"></polyline>
+          <line x1="12" y1="15" x2="12" y2="3"></line>
+        </svg>
+        <span>Download Region</span>
+      </button>
+      <button class="btn-cancel-region" onclick="exitRegionDownloadMode()">Cancel</button>
+    </div>
+    <div id="region-progress-container" style="display: none; flex-direction: column; gap: 8px;">
+      <div class="progress-bar-track">
+        <div id="region-progress-fill" class="progress-bar-fill"></div>
+      </div>
+      <div class="progress-label-row">
+        <span id="region-progress-text">Downloading 0%</span>
+        <button class="btn-cancel-prog" onclick="cancelRegionDownload()">Stop</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // 1. Initial coordinates: BOGO CITY AREA, CEBU
+    var BOGO_LAT = 11.0519;
+    var BOGO_LNG = 124.0055;
+
+    // Initialize Leaflet Map centered at Bogo City Area
+    var map = L.map('map', {
+      zoomControl: true,
+      attributionControl: false
+    }).setView([BOGO_LAT, BOGO_LNG], 14);
+
+    // Free OpenStreetMap Tiles
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '&copy; OpenStreetMap contributors'
+    }).addTo(map);
+
+    // State Variables
+    var userLat = 0, userLng = 0, userBearing = 0;
+    var startLat = BOGO_LAT, startLng = BOGO_LNG, startAddress = "Bogo City Center";
+    var destLat = 0, destLng = 0, destAddress = "";
+    var activePinMode = 'none'; // 'start', 'dest', 'none'
+    var pendingPinLat = BOGO_LAT, pendingPinLng = BOGO_LNG;
+    var isNavigating = false;
+    var autoFollowUser = true;
+
+    // Layers
+    var userMarker = null;
+    var startMarker = null;
+    var destMarker = null;
+    var routeLayer = null;
+
+    // Crisp Vector SVGs for Turn Maneuvers
+    var MANEUVER_SVGS = {
+      'straight': '<svg viewBox="0 0 24 24" width="34" height="34" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="21" x2="12" y2="3"></line><polyline points="6 9 12 3 18 9"></polyline></svg>',
+      'turn-right': '<svg viewBox="0 0 24 24" width="34" height="34" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 19v-5a5 5 0 0 1 5-5h8"></path><polyline points="15 5 19 9 15 13"></polyline></svg>',
+      'turn-left': '<svg viewBox="0 0 24 24" width="34" height="34" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 19v-5a5 5 0 0 0-5-5H5"></path><polyline points="9 5 5 9 9 13"></polyline></svg>',
+      'slight-right': '<svg viewBox="0 0 24 24" width="34" height="34" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 19l4-9a4 4 0 0 1 3.5-2.5H19"></path><polyline points="15 3 19 7 15 11"></polyline></svg>',
+      'slight-left': '<svg viewBox="0 0 24 24" width="34" height="34" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"><path d="M17 19l-4-9a4 4 0 0 0-3.5-2.5H5"></path><polyline points="9 3 5 7 9 11"></polyline></svg>',
+      'sharp-right': '<svg viewBox="0 0 24 24" width="34" height="34" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 19v-8a6 6 0 0 1 10-4.5L19 9"></path><polyline points="19 4 19 9 14 9"></polyline></svg>',
+      'sharp-left': '<svg viewBox="0 0 24 24" width="34" height="34" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 19v-8a6 6 0 0 0-10-4.5L5 9"></path><polyline points="5 4 5 9 10 9"></polyline></svg>',
+      'roundabout': '<svg viewBox="0 0 24 24" width="34" height="34" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="7"></circle><polyline points="12 2 16 6 12 10"></polyline><polyline points="22 12 18 16 14 12"></polyline></svg>',
+      'uturn': '<svg viewBox="0 0 24 24" width="34" height="34" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 20V10a6 6 0 0 0-12 0v10"></path><polyline points="2 15 6 20 10 15"></polyline></svg>',
+      'arrive': '<svg viewBox="0 0 24 24" width="34" height="34" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 22V3"></path><path d="M4 4h12l-2 5 2 5H4"></path></svg>'
+    };
+
+    function getManeuverSvg(maneuver) {
+      return MANEUVER_SVGS[maneuver] || MANEUVER_SVGS['straight'];
+    }
+
+    // ====== PREVIOUS & FAVORITE ROUTES STORAGE ======
+    var recentRoutes = [];     // Max 5 items: [{id, startAddress, startLat, startLng, destAddress, destLat, destLng, distStr, durStr, timestamp}]
+    var favoriteRoutes = [];   // Array of saved favorite routes
+    var currentRouteTab = 'recent';
+    var currentDistStr = '';
+    var currentDurStr = '';
+
+    function loadRouteStorage() {
+      try {
+        var recJson = '';
+        if (window.AndroidBridge && window.AndroidBridge.getPref) {
+          recJson = window.AndroidBridge.getPref('da_recent_routes', '');
+        }
+        if (!recJson) {
+          recJson = localStorage.getItem('da_recent_routes') || '[]';
+        }
+        recentRoutes = JSON.parse(recJson) || [];
+      } catch (e) {
+        recentRoutes = [];
+      }
+
+      try {
+        var favJson = '';
+        if (window.AndroidBridge && window.AndroidBridge.getPref) {
+          favJson = window.AndroidBridge.getPref('da_favorite_routes', '');
+        }
+        if (!favJson) {
+          favJson = localStorage.getItem('da_favorite_routes') || '[]';
+        }
+        favoriteRoutes = JSON.parse(favJson) || [];
+      } catch (e) {
+        favoriteRoutes = [];
+      }
+
+      renderRoutesList();
+      updateFavButtonState();
+    }
+
+    function saveRouteStorage() {
+      try {
+        var recStr = JSON.stringify(recentRoutes);
+        localStorage.setItem('da_recent_routes', recStr);
+        if (window.AndroidBridge && window.AndroidBridge.savePref) {
+          window.AndroidBridge.savePref('da_recent_routes', recStr);
+        }
+      } catch (e) {}
+
+      try {
+        var favStr = JSON.stringify(favoriteRoutes);
+        localStorage.setItem('da_favorite_routes', favStr);
+        if (window.AndroidBridge && window.AndroidBridge.savePref) {
+          window.AndroidBridge.savePref('da_favorite_routes', favStr);
+        }
+      } catch (e) {}
+
+      renderRoutesList();
+      updateFavButtonState();
+    }
+
+    function switchRouteTab(tab) {
+      currentRouteTab = tab;
+      var btnRec = document.getElementById('tab-btn-recent');
+      var btnFav = document.getElementById('tab-btn-fav');
+      if (tab === 'recent') {
+        if (btnRec) btnRec.classList.add('active');
+        if (btnFav) btnFav.classList.remove('active');
+      } else {
+        if (btnRec) btnRec.classList.remove('active');
+        if (btnFav) btnFav.classList.add('active');
+      }
+      renderRoutesList();
+    }
+
+    function isRouteFavorited(sLat, sLng, dLat, dLng, dName) {
+      for (var i = 0; i < favoriteRoutes.length; i++) {
+        var f = favoriteRoutes[i];
+        if (dName && f.destAddress && f.destAddress === dName) return true;
+        var dDist = Math.hypot((f.destLat - dLat), (f.destLng - dLng));
+        var sDist = Math.hypot((f.startLat - sLat), (f.startLng - sLng));
+        if (dDist < 0.001 && sDist < 0.002) return true;
+      }
+      return false;
+    }
+
+    function renderRoutesList() {
+      var container = document.getElementById('saved-routes-list');
+      var lblRec = document.getElementById('tab-label-recent');
+      var lblFav = document.getElementById('tab-label-fav');
+      if (lblRec) lblRec.innerText = "Recent (" + recentRoutes.length + ")";
+      if (lblFav) lblFav.innerText = "Favorites (" + favoriteRoutes.length + ")";
+
+      if (!container) return;
+
+      var list = (currentRouteTab === 'recent') ? recentRoutes : favoriteRoutes;
+
+      // Quick add current favorite button visibility in planner
+      var addFavBtn = document.getElementById('btn-save-curr-fav');
+      if (addFavBtn) {
+        if (destLat !== 0 && destLng !== 0 && destAddress && destAddress !== "Choose destination...") {
+          var alreadyFav = isRouteFavorited(startLat, startLng, destLat, destLng, destAddress);
+          addFavBtn.style.display = alreadyFav ? 'none' : 'flex';
+        } else {
+          addFavBtn.style.display = 'none';
+        }
+      }
+
+      if (!list || list.length === 0) {
+        var emptyText = (currentRouteTab === 'recent') ?
+          "No previous routes stored yet.<br>Plan a route and it will appear here." :
+          "No favorite routes saved yet.<br>Tap the star icon on any route to save it.";
+        container.innerHTML = '<div class="empty-routes-msg">' + emptyText + '</div>';
+        return;
+      }
+
+      var html = '';
+      for (var i = 0; i < list.length; i++) {
+        var r = list[i];
+        var isFav = isRouteFavorited(r.startLat, r.startLng, r.destLat, r.destLng, r.destAddress);
+        var starSvg = isFav ?
+          '<svg width="15" height="15" viewBox="0 0 24 24" fill="#F59E0B" stroke="#F59E0B" stroke-width="1.5"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>' :
+          '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>';
+
+        var meta = '';
+        if (r.distStr) meta += '<span>' + escapeHtml(r.distStr) + '</span>';
+        if (r.distStr && r.durStr) meta += '<span>•</span>';
+        if (r.durStr) meta += '<span>' + escapeHtml(r.durStr) + '</span>';
+        if (!meta) meta = '<span>Tap to route</span>';
+
+        html += '<div class="route-item-card" onclick="selectSavedRoute(' + i + ', \'' + currentRouteTab + '\')">' +
+                  '<div class="route-item-icon">' +
+                    '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">' +
+                      '<circle cx="6" cy="19" r="2.5"></circle>' +
+                      '<path d="M8.5 19h7a3.5 3.5 0 0 0 0-7H8a2.5 2.5 0 0 1 0-5h9"></path>' +
+                      '<polyline points="15 4 18 7 15 10"></polyline>' +
+                    '</svg>' +
+                  '</div>' +
+                  '<div class="route-item-body">' +
+                    '<div class="route-item-endpoints">' + escapeHtml(r.startAddress || 'Start') + ' → ' + escapeHtml(r.destAddress || 'Dest') + '</div>' +
+                    '<div class="route-item-meta">' + meta + '</div>' +
+                  '</div>' +
+                  '<div class="route-item-actions" onclick="event.stopPropagation()">' +
+                    '<button class="route-act-btn ' + (isFav ? 'starred' : '') + '" onclick="toggleRouteFavByIndex(' + i + ', \'' + currentRouteTab + '\')" title="' + (isFav ? 'Remove Favorite' : 'Save Favorite') + '">' +
+                      starSvg +
+                    '</button>' +
+                    '<button class="route-act-btn" onclick="deleteRouteByIndex(' + i + ', \'' + currentRouteTab + '\')" title="Remove">' +
+                      '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">' +
+                        '<line x1="18" y1="6" x2="6" y2="18"></line>' +
+                        '<line x1="6" y1="6" x2="18" y2="18"></line>' +
+                      '</svg>' +
+                    '</button>' +
+                  '</div>' +
+                '</div>';
+      }
+      container.innerHTML = html;
+    }
+
+    function escapeHtml(str) {
+      if (!str) return '';
+      return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+
+    function addRecentRoute(startAddr, startL, startG, destAddr, destL, destG, dStr, durStr) {
+      if (!destAddr || destAddr === "Choose destination..." || destL === 0) return;
+
+      var filtered = [];
+      for (var i = 0; i < recentRoutes.length; i++) {
+        var item = recentRoutes[i];
+        var dDist = Math.hypot((item.destLat - destL), (item.destLng - destG));
+        var sDist = Math.hypot((item.startLat - startL), (item.startLng - startG));
+        if (dDist < 0.001 && sDist < 0.002) continue; // Skip duplicate
+        if (item.destAddress === destAddr && item.startAddress === startAddr) continue;
+        filtered.push(item);
+      }
+
+      var newRoute = {
+        id: "rt_" + Date.now(),
+        startAddress: startAddr || "Current Location",
+        startLat: startL,
+        startLng: startG,
+        destAddress: destAddr,
+        destLat: destL,
+        destLng: destG,
+        distStr: dStr || "",
+        durStr: durStr || "",
+        timestamp: Date.now()
+      };
+
+      filtered.unshift(newRoute);
+      if (filtered.length > 5) {
+        filtered = filtered.slice(0, 5); // Limit up to five previous routes
+      }
+      recentRoutes = filtered;
+      saveRouteStorage();
+    }
+
+    function selectSavedRoute(index, tab) {
+      var list = (tab === 'recent') ? recentRoutes : favoriteRoutes;
+      if (!list || index >= list.length) return;
+      var r = list[index];
+
+      setLocationPoint(r.startLat, r.startLng, r.startAddress, true);
+      setLocationPoint(r.destLat, r.destLng, r.destAddress, false);
+      closeRoutePlanner();
+
+      if (window.AndroidBridge && window.AndroidBridge.showToast) {
+        window.AndroidBridge.showToast("Loaded: " + r.destAddress);
+      }
+    }
+
+    function toggleRouteFavByIndex(index, tab) {
+      var list = (tab === 'recent') ? recentRoutes : favoriteRoutes;
+      if (!list || index >= list.length) return;
+      var r = list[index];
+
+      var foundIdx = -1;
+      for (var i = 0; i < favoriteRoutes.length; i++) {
+        var f = favoriteRoutes[i];
+        if (f.destAddress === r.destAddress || Math.hypot(f.destLat - r.destLat, f.destLng - r.destLng) < 0.001) {
+          foundIdx = i;
+          break;
+        }
+      }
+
+      if (foundIdx >= 0) {
+        favoriteRoutes.splice(foundIdx, 1);
+        if (window.AndroidBridge && window.AndroidBridge.showToast) {
+          window.AndroidBridge.showToast("Removed from Favorites");
+        }
+      } else {
+        var favObj = {
+          id: "fav_" + Date.now(),
+          startAddress: r.startAddress,
+          startLat: r.startLat,
+          startLng: r.startLng,
+          destAddress: r.destAddress,
+          destLat: r.destLat,
+          destLng: r.destLng,
+          distStr: r.distStr,
+          durStr: r.durStr,
+          timestamp: Date.now()
+        };
+        favoriteRoutes.unshift(favObj);
+        if (window.AndroidBridge && window.AndroidBridge.showToast) {
+          window.AndroidBridge.showToast("Route saved to Favorites!");
+        }
+      }
+      saveRouteStorage();
+    }
+
+    function deleteRouteByIndex(index, tab) {
+      if (tab === 'recent') {
+        recentRoutes.splice(index, 1);
+      } else {
+        favoriteRoutes.splice(index, 1);
+      }
+      saveRouteStorage();
+      if (window.AndroidBridge && window.AndroidBridge.showToast) {
+        window.AndroidBridge.showToast("Route deleted");
+      }
+    }
+
+    function addCurrentPlanToFavorite() {
+      if (destLat === 0 || !destAddress || destAddress === "Choose destination...") {
+        if (window.AndroidBridge && window.AndroidBridge.showToast) {
+          window.AndroidBridge.showToast("Choose a destination first");
+        }
+        return;
+      }
+      if (isRouteFavorited(startLat, startLng, destLat, destLng, destAddress)) {
+        if (window.AndroidBridge && window.AndroidBridge.showToast) {
+          window.AndroidBridge.showToast("Route is already in Favorites");
+        }
+        return;
+      }
+      var favObj = {
+        id: "fav_" + Date.now(),
+        startAddress: startAddress || "Current Location",
+        startLat: startLat,
+        startLng: startLng,
+        destAddress: destAddress,
+        destLat: destLat,
+        destLng: destLng,
+        distStr: currentDistStr,
+        durStr: currentDurStr,
+        timestamp: Date.now()
+      };
+      favoriteRoutes.unshift(favObj);
+      saveRouteStorage();
+      if (window.AndroidBridge && window.AndroidBridge.showToast) {
+        window.AndroidBridge.showToast("Route added to Favorites!");
+      }
+    }
+
+    function toggleCurrentRouteFavorite() {
+      if (destLat === 0 || !destAddress || destAddress === "Choose destination...") return;
+
+      var foundIdx = -1;
+      for (var i = 0; i < favoriteRoutes.length; i++) {
+        var f = favoriteRoutes[i];
+        if (f.destAddress === destAddress || Math.hypot(f.destLat - destLat, f.destLng - destLng) < 0.001) {
+          foundIdx = i;
+          break;
+        }
+      }
+
+      if (foundIdx >= 0) {
+        favoriteRoutes.splice(foundIdx, 1);
+        if (window.AndroidBridge && window.AndroidBridge.showToast) {
+          window.AndroidBridge.showToast("Removed from Favorites");
+        }
+      } else {
+        var favObj = {
+          id: "fav_" + Date.now(),
+          startAddress: startAddress || "Current Location",
+          startLat: startLat,
+          startLng: startLng,
+          destAddress: destAddress,
+          destLat: destLat,
+          destLng: destLng,
+          distStr: currentDistStr,
+          durStr: currentDurStr,
+          timestamp: Date.now()
+        };
+        favoriteRoutes.unshift(favObj);
+        if (window.AndroidBridge && window.AndroidBridge.showToast) {
+          window.AndroidBridge.showToast("Route added to Favorites!");
+        }
+      }
+      saveRouteStorage();
+    }
+
+    function updateFavButtonState() {
+      var btn = document.getElementById('btn-fav-route');
+      var starSvg = document.getElementById('fav-star-icon');
+      if (!btn || !starSvg) return;
+
+      var isFav = (destLat !== 0 && destAddress && destAddress !== "Choose destination...") &&
+                  isRouteFavorited(startLat, startLng, destLat, destLng, destAddress);
+
+      if (isFav) {
+        btn.classList.add('active');
+        btn.title = "Favorited";
+        starSvg.setAttribute('fill', '#F59E0B');
+        starSvg.setAttribute('stroke', '#F59E0B');
+      } else {
+        btn.classList.remove('active');
+        btn.title = "Save Route to Favorites";
+        starSvg.setAttribute('fill', 'none');
+        starSvg.setAttribute('stroke', 'currentColor');
+      }
+    }
+
+    // Route Planner Modal Controls
+    function openRoutePlanner() {
+      document.getElementById('planner-card').classList.add('open');
+      renderRoutesList();
+    }
+
+    function closeRoutePlanner() {
+      document.getElementById('planner-card').classList.remove('open');
+    }
+
+    // Crisp Open-Source Vector SVG Pin generator
+    function getPinSvg(color, letter) {
+      return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 36 48" width="36" height="48" style="display:block;filter:drop-shadow(0 4px 8px rgba(0,0,0,0.35));">' +
+        '<path d="M18 2 C9.16 2 2 9.16 2 18 C2 28.5 15.2 44.2 17.1 46.4 C17.6 47 18.4 47 18.9 46.4 C20.8 44.2 34 28.5 34 18 C34 9.16 26.84 2 18 2 Z" fill="' + color + '" stroke="#FFFFFF" stroke-width="2.5"/>' +
+        '<circle cx="18" cy="18" r="9.5" fill="#FFFFFF"/>' +
+        '<text x="18" y="22.5" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif" font-weight="800" font-size="13" fill="' + color + '" text-anchor="middle">' + letter + '</text>' +
+      '</svg>';
+    }
+
+    function renderStartMarker(lat, lng) {
+      if (startMarker) map.removeLayer(startMarker);
+      var icon = L.divIcon({
+        className: 'custom-svg-marker',
+        html: getPinSvg('#74A72E', 'A'),
+        iconSize: [36, 48],
+        iconAnchor: [18, 48]
+      });
+      startMarker = L.marker([lat, lng], { icon: icon }).addTo(map);
+    }
+
+    function renderDestMarker(lat, lng) {
+      if (destMarker) map.removeLayer(destMarker);
+      var icon = L.divIcon({
+        className: 'custom-svg-marker',
+        html: getPinSvg('#E53935', 'B'),
+        iconSize: [36, 48],
+        iconAnchor: [18, 48]
+      });
+      destMarker = L.marker([lat, lng], { icon: icon }).addTo(map);
+    }
+
+    // Set initial start point marker at Bogo City Center
+    renderStartMarker(BOGO_LAT, BOGO_LNG);
+
+    // Map Drag Listener for Pin Mode
+    map.on('movestart', function() {
+      if (activePinMode !== 'none') {
+        var container = document.getElementById('center-pin-container');
+        if (container) container.classList.add('floating');
+      }
+    });
+
+    map.on('move', function() {
+      if (activePinMode !== 'none') {
+        var center = map.getCenter();
+        pendingPinLat = center.lat;
+        pendingPinLng = center.lng;
+      }
+    });
+
+    map.on('moveend', function() {
+      if (activePinMode !== 'none') {
+        var container = document.getElementById('center-pin-container');
+        if (container) container.classList.remove('floating');
+        var center = map.getCenter();
+        pendingPinLat = center.lat;
+        pendingPinLng = center.lng;
+        if (window.AndroidBridge && window.AndroidBridge.reverseGeocode) {
+          window.AndroidBridge.reverseGeocode(center.lat, center.lng);
+        }
+      }
+    });
+
+    // Disable auto-follow when user drags manually during ride
+    map.on('dragstart', function() {
+      if (isNavigating) {
+        autoFollowUser = false;
+      }
+    });
+
+    // ====== GPS & USER LOCATION ======
+    function onUserLocation(lat, lng, heading, accuracy, speedKmh) {
+      userLat = lat;
+      userLng = lng;
+      userBearing = heading || 0;
+
+      if (!userMarker) {
+        var iconHtml = '<div style="position:relative;width:24px;height:24px;">' +
+                         '<div style="position:absolute;width:24px;height:24px;border-radius:50%;background:#007AFF;opacity:0.25;animation:pulse 2s infinite;"></div>' +
+                         '<div style="position:absolute;top:3px;left:3px;width:18px;height:18px;border-radius:50%;background:#007AFF;border:3px solid #FFFFFF;box-shadow:0 2px 8px rgba(0,122,255,0.5);"></div>' +
+                       '</div>';
+        var userIcon = L.divIcon({
+          className: 'komoot-user-marker',
+          html: iconHtml,
+          iconSize: [24, 24],
+          iconAnchor: [12, 12]
+        });
+        userMarker = L.marker([lat, lng], { icon: userIcon }).addTo(map);
+      } else {
+        userMarker.setLatLng([lat, lng]);
+      }
+
+      // Auto camera follow in active ride
+      if (isNavigating && autoFollowUser) {
+        map.setView([lat, lng], 17, { animate: true });
+      }
+    }
+
+    function recenterOnUser() {
+      autoFollowUser = true;
+      if (userLat !== 0 && userLng !== 0) {
+        map.setView([userLat, userLng], 16, { animate: true });
+      } else {
+        if (window.AndroidBridge && window.AndroidBridge.requestCurrentLocation) {
+          window.AndroidBridge.requestCurrentLocation(true);
+        } else {
+          map.setView([BOGO_LAT, BOGO_LNG], 15, { animate: true });
+        }
+      }
+    }
+
+    function useCurrentLocation(isStart) {
+      if (window.AndroidBridge && window.AndroidBridge.requestCurrentLocation) {
+        window.AndroidBridge.requestCurrentLocation(isStart);
+      }
+    }
+
+    function setLocationPoint(lat, lng, address, isStart) {
+      if (isStart) {
+        startLat = lat;
+        startLng = lng;
+        startAddress = address || "Current Location";
+        document.getElementById('start-label').innerText = startAddress;
+        renderStartMarker(lat, lng);
+        map.setView([lat, lng], 15);
+      } else {
+        destLat = lat;
+        destLng = lng;
+        destAddress = address || "Destination";
+        document.getElementById('dest-label').innerText = destAddress;
+        renderDestMarker(lat, lng);
+      }
+      renderRoutesList();
+      updateFavButtonState();
+      checkAutoRoute();
+    }
+
+    // ====== CENTER PIN MODE ======
+    function startPinMode(mode) {
+      activePinMode = mode;
+      closeRoutePlanner();
+      document.getElementById('top-bar').style.display = 'none';
+      document.getElementById('center-pin-container').style.display = 'flex';
+      document.getElementById('pin-confirm-card').style.display = 'flex';
+
+      var wrap = document.getElementById('center-pin-svg-wrap');
+      var confirmBtnText = document.getElementById('btn-confirm-text');
+
+      if (mode === 'start') {
+        wrap.innerHTML = getPinSvg('#74A72E', 'A');
+        confirmBtnText.innerText = 'Set as Starting Point';
+      } else {
+        wrap.innerHTML = getPinSvg('#E53935', 'B');
+        confirmBtnText.innerText = 'Set as Destination';
+      }
+
+      var center = map.getCenter();
+      pendingPinLat = center.lat;
+      pendingPinLng = center.lng;
+      if (window.AndroidBridge && window.AndroidBridge.reverseGeocode) {
+        window.AndroidBridge.reverseGeocode(center.lat, center.lng);
+      }
+    }
+
+    function onAddressResolved(address) {
+      document.getElementById('pin-address-label').innerText = address;
+    }
+
+    function confirmPinSelection() {
+      var addr = document.getElementById('pin-address-label').innerText;
+      var wasMode = activePinMode;
+      activePinMode = 'none';
+      document.getElementById('top-bar').style.display = 'flex';
+      document.getElementById('center-pin-container').style.display = 'none';
+      document.getElementById('pin-confirm-card').style.display = 'none';
+
+      if (wasMode === 'start') {
+        setLocationPoint(pendingPinLat, pendingPinLng, addr, true);
+        openRoutePlanner();
+      } else if (wasMode === 'dest') {
+        setLocationPoint(pendingPinLat, pendingPinLng, addr, false);
+      }
+    }
+
+    function cancelPinMode() {
+      activePinMode = 'none';
+      document.getElementById('top-bar').style.display = 'flex';
+      document.getElementById('center-pin-container').style.display = 'none';
+      document.getElementById('pin-confirm-card').style.display = 'none';
+      openRoutePlanner();
+    }
+
+    // ====== SEARCH ======
+    function showSearchModal(isStart) {
+      if (window.AndroidBridge && window.AndroidBridge.showSearchDialog) {
+        window.AndroidBridge.showSearchDialog(isStart);
+      }
+    }
+
+    // ====== GPX IMPORT ======
+    function triggerGpxImport() {
+      if (window.AndroidBridge && window.AndroidBridge.pickGpxFile) {
+        window.AndroidBridge.pickGpxFile();
+      }
+    }
+
+    function checkAutoRoute() {
+      if (startLat !== 0 && startLng !== 0 && destLat !== 0 && destLng !== 0) {
+        if (window.AndroidBridge && window.AndroidBridge.calculateRoute) {
+          window.AndroidBridge.calculateRoute(startLat, startLng, destLat, destLng);
+        }
+      }
+    }
+
+    function formatDistance(distanceMeters) {
+      if (!distanceMeters || distanceMeters <= 0) return "0 m";
+      if (typeof selectedUnits !== 'undefined' && selectedUnits === 'imperial') {
+        var miles = distanceMeters * 0.000621371;
+        if (miles < 0.2) return Math.round(distanceMeters * 3.28084) + " ft";
+        return miles.toFixed(1) + " mi";
+      }
+      return (distanceMeters < 1000) ? Math.round(distanceMeters) + " m" : (distanceMeters / 1000.0).toFixed(1) + " km";
+    }
+
+    function formatSpeed(speedKmh) {
+      var s = Math.round(speedKmh || 0);
+      if (typeof selectedUnits !== 'undefined' && selectedUnits === 'imperial') {
+        return Math.round(s * 0.621371) + " mph";
+      }
+      return s + " km/h";
+    }
+
+    // Display calculated route or GPX route
+    function displayRoute(geoJsonCoords, distanceMeters, durationSeconds, firstManeuver, firstStreet) {
+      try {
+        closeRoutePlanner();
+        if (routeLayer) map.removeLayer(routeLayer);
+
+        var latlngs = geoJsonCoords.map(function(pt) {
+          return [pt[1], pt[0]];
+        });
+
+        routeLayer = L.polyline(latlngs, {
+          color: '#1E88E5',
+          weight: 6,
+          opacity: 0.95,
+          lineCap: 'round',
+          lineJoin: 'round'
+        }).addTo(map);
+
+        if (latlngs && latlngs.length > 0) {
+          map.fitBounds(routeLayer.getBounds(), { padding: [60, 60] });
+        }
+
+        lastCalculatedDistMeters = distanceMeters;
+        lastCalculatedDurSec = durationSeconds;
+        var distStr = formatDistance(distanceMeters);
+        var minVal = Math.round((durationSeconds || 0) / 60.0);
+        var minStr = (minVal < 60) ? minVal + " min" : Math.floor(minVal / 60) + " h " + (minVal % 60) + " m";
+
+        var sheetDist = document.getElementById('sheet-distance');
+        if (sheetDist) sheetDist.innerText = distStr;
+        var sheetDur = document.getElementById('sheet-duration');
+        if (sheetDur) sheetDur.innerText = minStr;
+        var manTxt = document.getElementById('maneuver-text');
+        if (manTxt) manTxt.innerText = (firstManeuver || "Proceed") + " into " + (firstStreet || "Route");
+        var offPill = document.getElementById('sheet-offline-pill');
+        if (offPill) offPill.style.display = isOfflineRouting ? 'flex' : 'none';
+
+        var navSheet = document.getElementById('bottom-nav-sheet');
+        if (navSheet) navSheet.style.display = 'flex';
+
+        currentDistStr = distStr;
+        currentDurStr = minStr;
+        if (typeof addRecentRoute === 'function') {
+          addRecentRoute(startAddress, startLat, startLng, destAddress, destLat, destLng, distStr, minStr);
+        }
+        if (typeof updateFavButtonState === 'function') {
+          updateFavButtonState();
+        }
+      } catch (err) {
+        console.error("displayRoute error:", err);
+        var navSheet = document.getElementById('bottom-nav-sheet');
+        if (navSheet) navSheet.style.display = 'flex';
+      }
+    }
+
+    // Reset Route Selection & Fallback to Clean Map View
+    function resetRouteSelection() {
+      if (isNavigating || isSimulatingRide) {
+        stopNavigationMode();
+      }
+      if (routeLayer) {
+        map.removeLayer(routeLayer);
+        routeLayer = null;
+      }
+      if (destMarker) {
+        map.removeLayer(destMarker);
+        destMarker = null;
+      }
+      destLat = 0;
+      destLng = 0;
+      destAddress = "";
+      currentDistStr = '';
+      currentDurStr = '';
+      document.getElementById('dest-label').innerText = "Choose destination...";
+      document.getElementById('bottom-nav-sheet').style.display = 'none';
+      updateFavButtonState();
+
+      if (window.AndroidBridge && window.AndroidBridge.clearRoute) {
+        window.AndroidBridge.clearRoute();
+      }
+      recenterOnUser();
+    }
+
+    // ====== SIMULATION STATE ======
+    var selectedSimSpeed = 50;
+    var isSimulatingRide = false;
+    var SIM_SPEEDS = [20, 50, 100, 150];
+
+    function setSimSpeed(speed, el) {
+      selectedSimSpeed = speed;
+      var chips = document.querySelectorAll('.sim-speed-chip');
+      chips.forEach(function(c) { c.classList.remove('active'); });
+      if (el) el.classList.add('active');
+
+      if (isSimulatingRide && window.AndroidBridge && window.AndroidBridge.setSimulationSpeed) {
+        window.AndroidBridge.setSimulationSpeed(speed);
+        document.getElementById('hud-sim-label').innerText = "Sim " + speed + " km/h";
+      }
+    }
+
+    function cycleLiveSimSpeed() {
+      var idx = SIM_SPEEDS.indexOf(selectedSimSpeed);
+      idx = (idx + 1) % SIM_SPEEDS.length;
+      selectedSimSpeed = SIM_SPEEDS[idx];
+      if (window.AndroidBridge && window.AndroidBridge.setSimulationSpeed) {
+        window.AndroidBridge.setSimulationSpeed(selectedSimSpeed);
+      }
+      document.getElementById('hud-sim-label').innerText = "Sim " + selectedSimSpeed + " km/h";
+    }
+
+    function startSimulatedRide() {
+      isSimulatingRide = true;
+      startNavigationMode(true);
+    }
+
+    // ====== IN-RIDE TURN-BY-TURN HUD CONTROLS ======
+    function handleNavigationButton() {
+      if (!isNavigating) {
+        isSimulatingRide = false;
+        startNavigationMode(false);
+      } else {
+        stopNavigationMode();
+      }
+    }
+
+    function startNavigationMode(isSimulation) {
+      isNavigating = true;
+      autoFollowUser = true;
+
+      // Hide top bar, planner card, and bottom overview sheet
+      document.getElementById('top-bar').style.display = 'none';
+      closeRoutePlanner();
+      document.getElementById('bottom-nav-sheet').style.display = 'none';
+
+      // Show in-ride HUD
+      document.getElementById('active-nav-hud').style.display = 'flex';
+      document.getElementById('active-nav-bottom').style.display = 'flex';
+
+      if (isSimulation) {
+        document.getElementById('hud-sim-indicator').style.display = 'flex';
+        document.getElementById('hud-sim-label').innerText = "Sim " + selectedSimSpeed + " km/h";
+        if (window.AndroidBridge && window.AndroidBridge.startSimulation) {
+          window.AndroidBridge.startSimulation(selectedSimSpeed);
+        }
+      } else {
+        document.getElementById('hud-sim-indicator').style.display = 'none';
+        if (window.AndroidBridge && window.AndroidBridge.startNavigation) {
+          window.AndroidBridge.startNavigation();
+        }
+      }
+
+      // Zoom closer for ride
+      if (userLat !== 0 && userLng !== 0) {
+        map.setView([userLat, userLng], 17, { animate: true });
+      } else if (startLat !== 0 && startLng !== 0) {
+        map.setView([startLat, startLng], 17, { animate: true });
+      }
+    }
+
+    function stopNavigationMode() {
+      isNavigating = false;
+      isSimulatingRide = false;
+
+      // Restore top bar, hide in-ride HUD
+      document.getElementById('top-bar').style.display = 'flex';
+      document.getElementById('active-nav-hud').style.display = 'none';
+      document.getElementById('active-nav-bottom').style.display = 'none';
+      document.getElementById('hud-sim-indicator').style.display = 'none';
+
+      if (routeLayer) {
+        document.getElementById('bottom-nav-sheet').style.display = 'flex';
+      }
+
+      if (window.AndroidBridge && window.AndroidBridge.stopNavigation) {
+        window.AndroidBridge.stopNavigation();
+      }
+    }
+
+    function stopNavFromNative() {
+      if (isNavigating) {
+        stopNavigationMode();
+      }
+    }
+
+    // Real-time Turn-by-Turn HUD updates from Java
+    function updateNavHud(maneuver, turnDist, street, remainingDist, remainingDuration, eta, nextManeuver, speedKmh) {
+      document.getElementById('hud-turn-icon').innerHTML = getManeuverSvg(maneuver);
+      document.getElementById('hud-maneuver-dist').innerText = "In " + turnDist;
+      document.getElementById('hud-maneuver-street').innerText = street;
+      document.getElementById('hud-eta-val').innerText = "ETA " + eta;
+      document.getElementById('hud-eta-sub').innerText = remainingDuration + " • " + remainingDist;
+      document.getElementById('hud-speed-badge').innerText = formatSpeed(speedKmh);
+
+      // Optional next preview
+      var preview = document.getElementById('hud-next-preview');
+      if (nextManeuver && nextManeuver.length > 0) {
+        var parts = nextManeuver.split('|');
+        document.getElementById('hud-next-text').innerText = parts[0] + " onto " + (parts[1] || 'Road');
+        preview.style.display = 'flex';
+      } else {
+        preview.style.display = 'none';
+      }
+    }
+
+    // Bluetooth Status
+    function setBluetoothState(connected, name) {
+      var pill = document.getElementById('bt-pill');
+      var txt = document.getElementById('bt-status-text');
+      if (connected) {
+        pill.className = 'bt-pill connected';
+        txt.innerText = name || 'Connected';
+      } else {
+        pill.className = 'bt-pill';
+        txt.innerText = 'AMOLED';
+      }
+    }
+
+    function triggerBluetoothConnect() {
+      if (window.AndroidBridge && window.AndroidBridge.toggleBluetooth) {
+        window.AndroidBridge.toggleBluetooth();
+      }
+    }
+
+    function panTo(lat, lng, zoom) {
+      map.setView([lat, lng], zoom || 15, { animate: true });
+    }
+
+    // ====== SETTINGS & OFFLINE ROUTING / REGION DOWNLOAD ======
+    var isOfflineRouting = false;
+    var isRegionDownloadActive = false;
+
+    function openSettingsModal() {
+      closeRoutePlanner();
+      document.getElementById('settings-card').classList.add('open');
+      renderSavedRegions();
+      if (window.AndroidBridge) {
+        if (window.AndroidBridge.isRoutingOffline) {
+          try {
+            var offline = window.AndroidBridge.isRoutingOffline();
+            onRoutingModeLoaded(offline);
+          } catch (e) {}
+        }
+        if (window.AndroidBridge.isKeepScreenOn) {
+          try {
+            var keepOn = window.AndroidBridge.isKeepScreenOn();
+            onKeepScreenOnLoaded(keepOn);
+          } catch (e) {}
+        }
+        if (window.AndroidBridge.getOfflineStorageInfo) {
+          try {
+            var info = JSON.parse(window.AndroidBridge.getOfflineStorageInfo());
+            onOfflineStorageInfoLoaded(info);
+          } catch (e) {}
+        }
+      }
+    }
+
+    function closeSettingsModal() {
+      document.getElementById('settings-card').classList.remove('open');
+    }
+
+    function selectRoutingMode(offline) {
+      isOfflineRouting = offline;
+      updateRoutingModeUi(offline);
+      if (window.AndroidBridge && window.AndroidBridge.setRoutingMode) {
+        window.AndroidBridge.setRoutingMode(offline);
+      }
+    }
+
+    function updateRoutingModeUi(offline) {
+      var btnOnline = document.getElementById('btn-mode-online');
+      var btnOffline = document.getElementById('btn-mode-offline');
+      var note = document.getElementById('routing-mode-note');
+      if (offline) {
+        btnOnline.classList.remove('active');
+        btnOffline.classList.add('active');
+        note.innerText = "Offline mode calculates route vectors locally without network connection. Ideal for zero-signal areas.";
+      } else {
+        btnOffline.classList.remove('active');
+        btnOnline.classList.add('active');
+        note.innerText = "Online uses live OSRM routing with complete road geometry. If network is lost, it automatically falls back to offline calculation.";
+      }
+    }
+
+    // Called from Java upon page finish
+    function onRoutingModeLoaded(offline) {
+      isOfflineRouting = offline;
+      updateRoutingModeUi(offline);
+    }
+
+    function onOfflineStorageInfoLoaded(info) {
+      if (!info) return;
+      var tilesSpan = document.getElementById('offline-storage-tiles');
+      var mbSpan = document.getElementById('offline-storage-mb');
+      if (tilesSpan) tilesSpan.innerText = info.count || 0;
+      if (mbSpan) mbSpan.innerText = (info.sizeMb || 0.0).toFixed(1) + " MB";
+    }
+
+    function clearOfflineTiles() {
+      if (confirm("Are you sure you want to delete all downloaded map tiles to free storage?")) {
+        if (window.AndroidBridge && window.AndroidBridge.clearOfflineTiles) {
+          window.AndroidBridge.clearOfflineTiles();
+        }
+      }
+    }
+
+    // ====== INTERACTIVE REGION DOWNLOADER ======
+    function lon2tile(lon, zoom) {
+      return Math.floor((lon + 180.0) / 360.0 * Math.pow(2, zoom));
+    }
+
+    function lat2tile(lat, zoom) {
+      var latRad = lat * Math.PI / 180.0;
+      return Math.floor((1.0 - Math.log(Math.tan(latRad) + 1.0 / Math.cos(latRad)) / Math.PI) / 2.0 * Math.pow(2, zoom));
+    }
+
+    function getFramedBounds() {
+      var overlay = document.getElementById('region-frame-overlay');
+      var rect = overlay.getBoundingClientRect();
+      var nw = map.containerPointToLatLng([rect.left, rect.top]);
+      var se = map.containerPointToLatLng([rect.right, rect.bottom]);
+      return L.latLngBounds(se, nw);
+    }
+
+    function enterRegionDownloadMode() {
+      closeSettingsModal();
+      isRegionDownloadActive = true;
+
+      // Hide other UI controls
+      document.getElementById('top-bar').style.display = 'none';
+      var bottomNav = document.getElementById('bottom-nav-sheet');
+      if (bottomNav) bottomNav.style.display = 'none';
+      var recenterBtn = document.getElementById('btn-recenter');
+      if (recenterBtn) recenterBtn.style.display = 'none';
+
+      // Show region download tools
+      document.getElementById('region-guide-banner').style.display = 'block';
+      document.getElementById('region-frame-overlay').style.display = 'block';
+      document.getElementById('region-frame-bar').style.display = 'flex';
+      document.getElementById('region-action-buttons').style.display = 'flex';
+      document.getElementById('region-progress-container').style.display = 'none';
+
+      // Bind move and zoom events to update live tile estimate
+      map.on('moveend zoomend', updateRegionTileEstimate);
+      updateRegionTileEstimate();
+    }
+
+    function exitRegionDownloadMode() {
+      isRegionDownloadActive = false;
+      map.off('moveend zoomend', updateRegionTileEstimate);
+
+      document.getElementById('region-guide-banner').style.display = 'none';
+      document.getElementById('region-frame-overlay').style.display = 'none';
+      document.getElementById('region-frame-bar').style.display = 'none';
+
+      document.getElementById('top-bar').style.display = 'flex';
+      var recenterBtn = document.getElementById('btn-recenter');
+      if (recenterBtn) recenterBtn.style.display = 'flex';
+      if (routeLayer) {
+        var bottomNav = document.getElementById('bottom-nav-sheet');
+        if (bottomNav) bottomNav.style.display = 'flex';
+      }
+
+      openSettingsModal();
+    }
+
+    function updateRegionTileEstimate() {
+      if (!isRegionDownloadActive) return;
+      var bounds = getFramedBounds();
+      var minLat = bounds.getSouth();
+      var maxLat = bounds.getNorth();
+      var minLng = bounds.getWest();
+      var maxLng = bounds.getEast();
+
+      var minZoom = 13;
+      var maxZoom = 16;
+      var totalTiles = 0;
+
+      for (var z = minZoom; z <= maxZoom; z++) {
+        var xMin = Math.max(0, lon2tile(minLng, z));
+        var xMax = Math.min((1 << z) - 1, lon2tile(maxLng, z));
+        if (xMin > xMax) { var t = xMin; xMin = xMax; xMax = t; }
+
+        var yMin = Math.max(0, lat2tile(maxLat, z));
+        var yMax = Math.min((1 << z) - 1, lat2tile(minLat, z));
+        if (yMin > yMax) { var t2 = yMin; yMin = yMax; yMax = t2; }
+
+        totalTiles += (xMax - xMin + 1) * (yMax - yMin + 1);
+      }
+
+      var badge = document.getElementById('region-est-badge');
+      var btn = document.getElementById('btn-start-download-region');
+      var estMb = (totalTiles * 18 / 1024).toFixed(1);
+
+      if (totalTiles > 2000) {
+        badge.className = 'region-est-badge warn';
+        badge.innerText = totalTiles + " tiles (Area too large, zoom in)";
+        btn.disabled = true;
+      } else {
+        badge.className = 'region-est-badge';
+        badge.innerText = totalTiles + " tiles (~" + estMb + " MB)";
+        btn.disabled = false;
+      }
+    }
+
+    var activeDownloadMeta = null;
+    function startRegionDownload() {
+      var bounds = getFramedBounds();
+      var nameInput = document.getElementById('region-name-input');
+      var name = (nameInput && nameInput.value.trim().length > 0) ? nameInput.value.trim() : "Custom Region";
+      activeDownloadMeta = {
+        name: name,
+        bounds: { south: bounds.getSouth(), west: bounds.getWest(), north: bounds.getNorth(), east: bounds.getEast() }
+      };
+
+      document.getElementById('region-action-buttons').style.display = 'none';
+      var progBox = document.getElementById('region-progress-container');
+      progBox.style.display = 'flex';
+      document.getElementById('region-progress-fill').style.width = '0%';
+      document.getElementById('region-progress-text').innerText = 'Starting download...';
+
+      if (window.AndroidBridge && window.AndroidBridge.downloadRegion) {
+        window.AndroidBridge.downloadRegion(
+          bounds.getSouth(), bounds.getWest(),
+          bounds.getNorth(), bounds.getEast(),
+          13, 16
+        );
+      }
+    }
+
+    function cancelRegionDownload() {
+      if (window.AndroidBridge && window.AndroidBridge.cancelRegionDownload) {
+        window.AndroidBridge.cancelRegionDownload();
+      }
+      document.getElementById('region-action-buttons').style.display = 'flex';
+      document.getElementById('region-progress-container').style.display = 'none';
+    }
+
+    function onRegionDownloadProgress(current, total, isDone) {
+      var fill = document.getElementById('region-progress-fill');
+      var txt = document.getElementById('region-progress-text');
+      if (total > 0) {
+        var pct = Math.min(100, Math.round((current / total) * 100));
+        if (fill) fill.style.width = pct + '%';
+        if (txt) txt.innerText = 'Downloaded ' + current + ' / ' + total + ' tiles (' + pct + '%)';
+      }
+      if (isDone) {
+        if (txt) txt.innerText = 'Download complete! Saved ' + current + ' tiles.';
+        if (activeDownloadMeta && current > 0) {
+          addSavedRegion(activeDownloadMeta.name, current, (current * 18 / 1024).toFixed(1), activeDownloadMeta.bounds);
+          activeDownloadMeta = null;
+        }
+        setTimeout(function() {
+          exitRegionDownloadMode();
+        }, 1200);
+      }
+    }
+
+    // ====== SAVED OFFLINE REGIONS STORAGE ======
+    var savedRegions = [];
+    function loadSavedRegions() {
+      var raw = localStorage.getItem('da_saved_regions');
+      if (!raw && window.AndroidBridge && window.AndroidBridge.getPref) {
+        raw = window.AndroidBridge.getPref('da_saved_regions', '');
+      }
+      try {
+        if (raw) savedRegions = JSON.parse(raw);
+      } catch (e) { savedRegions = []; }
+      renderSavedRegions();
+    }
+
+    function saveSavedRegions() {
+      var str = JSON.stringify(savedRegions);
+      localStorage.setItem('da_saved_regions', str);
+      if (window.AndroidBridge && window.AndroidBridge.savePref) {
+        window.AndroidBridge.savePref('da_saved_regions', str);
+      }
+    }
+
+    function addSavedRegion(name, tiles, sizeMb, bounds) {
+      savedRegions.unshift({
+        id: Date.now(),
+        name: name,
+        tiles: tiles,
+        sizeMb: sizeMb,
+        date: new Date().toLocaleDateString(undefined, { month: 'short', day: 'numeric' }),
+        bounds: bounds
+      });
+      if (savedRegions.length > 10) savedRegions.pop();
+      saveSavedRegions();
+      renderSavedRegions();
+    }
+
+    function renderSavedRegions() {
+      var container = document.getElementById('saved-regions-list');
+      if (!container) return;
+      if (!savedRegions || savedRegions.length === 0) {
+        container.innerHTML = '<div style="font-size: 11px; color: #9CA3AF; text-align: center; padding: 6px;">No saved regions yet</div>';
+        return;
+      }
+      var html = '';
+      savedRegions.forEach(function(r) {
+        html += '<div class="saved-region-card">';
+        html += '  <div>';
+        html += '    <div class="saved-region-name">' + escapeHtml(r.name) + '</div>';
+        html += '    <div class="saved-region-meta">' + r.tiles + ' tiles • ' + r.sizeMb + ' MB • ' + (r.date || '') + '</div>';
+        html += '  </div>';
+        html += '  <div class="saved-region-actions">';
+        html += '    <button class="btn-region-view" onclick="viewSavedRegion(' + r.id + ')">View</button>';
+        html += '    <button class="btn-region-delete" onclick="deleteSavedRegion(' + r.id + ')">Delete</button>';
+        html += '  </div>';
+        html += '</div>';
+      });
+      container.innerHTML = html;
+    }
+
+    function viewSavedRegion(id) {
+      var r = savedRegions.find(function(item) { return item.id === id; });
+      if (r && r.bounds) {
+        closeSettingsModal();
+        map.fitBounds([
+          [r.bounds.south, r.bounds.west],
+          [r.bounds.north, r.bounds.east]
+        ], { padding: [40, 40] });
+      }
+    }
+
+    function deleteSavedRegion(id) {
+      savedRegions = savedRegions.filter(function(item) { return item.id !== id; });
+      saveSavedRegions();
+      renderSavedRegions();
+    }
+
+    // ====== PREFERENCES: SCREEN AWAKE, UNITS, AUTO-RECENTER ======
+    var selectedUnits = 'metric';
+    var isKeepScreenAwake = true;
+    var isAutoRecenter = true;
+    var autoRecenterTimer = null;
+
+    function loadSettingsStorage() {
+      var u = localStorage.getItem('da_units');
+      if (!u && window.AndroidBridge && window.AndroidBridge.getPref) {
+        u = window.AndroidBridge.getPref('da_units', 'metric');
+      }
+      if (u) selectedUnits = u;
+      updateUnitsUi(selectedUnits);
+
+      var ar = localStorage.getItem('da_auto_recenter');
+      if (ar !== null) {
+        isAutoRecenter = (ar === '1');
+      }
+      updateAutoRecenterUi(isAutoRecenter);
+    }
+
+    function selectKeepScreenOn(keepOn) {
+      isKeepScreenAwake = keepOn;
+      updateKeepScreenOnUi(keepOn);
+      if (window.AndroidBridge && window.AndroidBridge.setKeepScreenOn) {
+        window.AndroidBridge.setKeepScreenOn(keepOn);
+      }
+    }
+
+    function onKeepScreenOnLoaded(keepOn) {
+      isKeepScreenAwake = keepOn;
+      updateKeepScreenOnUi(keepOn);
+    }
+
+    function updateKeepScreenOnUi(keepOn) {
+      var bAwake = document.getElementById('btn-screen-awake');
+      var bNormal = document.getElementById('btn-screen-normal');
+      if (bAwake && bNormal) {
+        if (keepOn) {
+          bAwake.classList.add('active');
+          bNormal.classList.remove('active');
+        } else {
+          bNormal.classList.add('active');
+          bAwake.classList.remove('active');
+        }
+      }
+    }
+
+    function selectUnits(unit) {
+      selectedUnits = unit;
+      localStorage.setItem('da_units', unit);
+      if (window.AndroidBridge && window.AndroidBridge.savePref) {
+        window.AndroidBridge.savePref('da_units', unit);
+      }
+      updateUnitsUi(unit);
+    }
+
+    function updateUnitsUi(unit) {
+      var bMet = document.getElementById('btn-units-metric');
+      var bImp = document.getElementById('btn-units-imperial');
+      if (bMet && bImp) {
+        if (unit === 'imperial') {
+          bImp.classList.add('active');
+          bMet.classList.remove('active');
+        } else {
+          bMet.classList.add('active');
+          bImp.classList.remove('active');
+        }
+      }
+    }
+
+    function selectAutoRecenter(enable) {
+      isAutoRecenter = enable;
+      localStorage.setItem('da_auto_recenter', enable ? '1' : '0');
+      if (window.AndroidBridge && window.AndroidBridge.savePref) {
+        window.AndroidBridge.savePref('da_auto_recenter', enable ? '1' : '0');
+      }
+      updateAutoRecenterUi(enable);
+    }
+
+    function updateAutoRecenterUi(enable) {
+      var b10 = document.getElementById('btn-recenter-10s');
+      var bOff = document.getElementById('btn-recenter-off');
+      if (b10 && bOff) {
+        if (enable) {
+          b10.classList.add('active');
+          bOff.classList.remove('active');
+        } else {
+          bOff.classList.add('active');
+          b10.classList.remove('active');
+        }
+      }
+    }
+
+    // Auto-recenter listener on map drag
+    map.on('dragstart', function() {
+      if (isAutoRecenter && (isNavigating || isSimulatingRide)) {
+        clearTimeout(autoRecenterTimer);
+        autoRecenterTimer = setTimeout(function() {
+          if (isNavigating || isSimulatingRide) {
+            recenterOnUser();
+          }
+        }, 10000);
+      }
+    });
+
+    // Initialize previous and favorite routes
+    loadRouteStorage();
+    loadSavedRegions();
+    loadSettingsStorage();
+  </script>
+</body>
+</html>

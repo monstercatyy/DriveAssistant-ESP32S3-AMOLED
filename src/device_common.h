@@ -1,18 +1,18 @@
 /*
- * device_common.h — AXP2101 PMU power management & colour blending helpers
+ * device_common.h - AXP2101 PMU power management & colour blending helpers
  */
 
 #pragma once
 
 #include <stdint.h>
-#include "pin_config.h"          // Must precede XPowersLib — defines XPOWERS_CHIP_AXP2101
+#include "pin_config.h"          // Must precede XPowersLib - defines XPOWERS_CHIP_AXP2101
 #include "XPowersLib.h"
 #include "Arduino_GFX_Library.h"
 #include "canvas/Arduino_Canvas.h"
 
 // Shared configuration
 struct AppConfig {
-    uint16_t brightness;   // Display brightness (0–255)
+    uint16_t brightness;   // Display brightness (0-255)
     uint32_t timeout_s;    // Idle seconds before auto power-off (0 = disabled)
 };
 

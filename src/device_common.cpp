@@ -1,5 +1,5 @@
 /*
- * device_common.cpp — AXP2101 PMU power management & RGB565 blending
+ * device_common.cpp - AXP2101 PMU power management & RGB565 blending
  */
 
 #include <Arduino.h>
@@ -17,15 +17,13 @@ void common_init()
     power.enableBattVoltageMeasure();
 
     // Configure physical PWR button:
-    //  - Power-ON press threshold: 1 Second (avoids auto-turn-on upon releasing long-press)
+    //  - Power-ON press threshold: 128ms for fast responsive turn-on
     //  - Power-OFF hardware threshold: 4 Seconds
     //  - Long-press IRQ time: 1.5 Seconds
     //  - Set hardware long press behavior to POWER OFF (not restart!)
-    power.setPowerKeyPressOnTime(XPOWERS_POWERON_1S);
+    power.setPowerKeyPressOnTime(XPOWERS_POWERON_128MS);
     power.setPowerKeyPressOffTime(XPOWERS_POWEROFF_4S);
     power.setIrqLevelTime(XPOWERS_AXP2101_IRQ_TIME_1S5);
-    power.setLongPressPowerOFF();
-    power.enableLongPressShutdown();
     power.disableIRQ(XPOWERS_AXP2101_ALL_IRQ);
     power.clearIrqStatus();
     power.enableIRQ(XPOWERS_AXP2101_PKEY_LONG_IRQ |

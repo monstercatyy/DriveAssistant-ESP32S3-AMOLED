@@ -1,5 +1,5 @@
 /*
- * screen_info.cpp — Device & Battery Status Screen Component (SCR_INFO)
+ * screen_info.cpp - Device & Battery Status Screen Component (SCR_INFO)
  */
 
 #include "screen_info.h"

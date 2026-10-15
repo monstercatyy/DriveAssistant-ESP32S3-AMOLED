@@ -1,5 +1,5 @@
 /*
- * ui_common.h — Shared UI constants, state, and text rendering helpers
+ * ui_common.h - Shared UI constants, state, and text rendering helpers
  *               used across all screen components.
  */
 
@@ -18,7 +18,7 @@
 #include "fonts/FreeSansBold12pt7b.h"
 #include "fonts/FreeSansBold24pt7b.h"
 
-#define FW_VERSION      "1.8.0-S3"
+#define FW_VERSION      "3.0.0-map"
 
 // ===================== Display Dimensions =====================
 #define SCREEN_W        LCD_WIDTH     // 368
@@ -57,9 +57,10 @@ extern bool     g_pollHigh;
 // ===================== Screen Identifiers =====================
 enum ScreenId : uint8_t {
   SCR_MAIN  = 0,  // Turn-by-turn navigation & waiting screen
-  SCR_MEDIA = 1,  // Music playback control screen
-  SCR_INFO  = 2,  // Battery, BLE, and hardware status screen
-  SCR_COUNT = 3
+  SCR_MAP   = 1,  // Beeline Moto 2 3D 40-degree Mini Map display
+  SCR_MEDIA = 2,  // Music playback control screen
+  SCR_INFO  = 3,  // Battery, BLE, and hardware status screen
+  SCR_COUNT = 4
 };
 
 // ===================== Shared Application State =====================
@@ -77,9 +78,15 @@ extern float    g_navProgress;   // 0.0f .. 1.0f (0-100% distance to maneuver)
 extern int      g_maxLegMeters;  // Max observed meters for current maneuver
 extern bool     g_navEnded;
 extern bool     g_navShown;
+extern String   g_navEta;
+extern String   g_navTotalDist;
 extern uint8_t  g_iconBits[ICON_W * ICON_H / 8];
 extern bool     g_iconValid;
 extern uint16_t *g_iconCanvas;
+
+// Weather state
+extern String   g_weatherCond;   // "sun", "pcloudy", "cloudy", "rain", "thunder", "snow", "fog"
+extern String   g_weatherTemp;   // e.g. "28°"
 
 // Media state
 extern uint8_t  g_mediaState;   // 0 = stopped, 1 = paused, 2 = playing
@@ -105,3 +112,19 @@ void   flushDisplay();
 void   drawTextC(const String &s, int16_t centerY, const GFXfont *font, uint16_t color);
 String fitStreet(String s, const GFXfont *font, uint16_t maxW);
 void   sendMediaCommand(char cmd);
+int    parseDistanceMeters(const String &d);
+
+// ===================== Road Vector Geometry =====================
+#define MAX_ROAD_SEGMENTS 24
+struct RoadSegment {
+  int16_t x0, z0;
+  int16_t x1, z1;
+  uint8_t type; // 1 = active navigation path (white), 0 = side street / other (gray)
+};
+extern RoadSegment g_roadSegments[MAX_ROAD_SEGMENTS];
+extern uint8_t     g_numRoadSegments;
+extern float       g_vehicleSpeedKmh;
+extern uint32_t    g_lastRoadVectorTimeMs;
+
+void setRoadVectors(const String &vectorPayload);
+void clearRoadVectors();

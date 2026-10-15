@@ -1,5 +1,5 @@
 /*
- * hw_panel.h — Waveshare ESP32-S3-Touch-AMOLED-1.8 board-revision support.
+ * hw_panel.h - Waveshare ESP32-S3-Touch-AMOLED-1.8 board-revision support.
  *
  * V1: SH8601 display + FT3168 touch (FocalTech @0x38).
  * V2: CO5300 display + CST816  touch (@0x15).

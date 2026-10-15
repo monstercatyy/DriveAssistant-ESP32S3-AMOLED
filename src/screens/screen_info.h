@@ -1,5 +1,5 @@
 /*
- * screen_info.h — Device & Battery Status Screen Component (SCR_INFO)
+ * screen_info.h - Device & Battery Status Screen Component (SCR_INFO)
  */
 
 #pragma once

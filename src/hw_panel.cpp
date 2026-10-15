@@ -1,5 +1,5 @@
 /*
- * hw_panel.cpp — see hw_panel.h. Auto-detects V1 (SH8601/FT3168) vs
+ * hw_panel.cpp - see hw_panel.h. Auto-detects V1 (SH8601/FT3168) vs
  * V2 (CO5300/CST816) and builds the matching display + touch drivers.
  */
 #include "hw_panel.h"

@@ -1,5 +1,5 @@
 /*
-  Drive Assistant — Firmware for Waveshare ESP32-S3-Touch-AMOLED-1.8
+  Drive Assistant - Firmware for Waveshare ESP32-S3-Touch-AMOLED-1.8
   ==================================================================
   Hardware Support (auto-detected at runtime via I2C @ 0x15):
   - V1 Board: SH8601 AMOLED (368x448 QSPI) + FT3168 Touch (@0x38) + XCA9554 (@0x20)
@@ -24,6 +24,7 @@
 
 #include "screens/ui_common.h"
 #include "screens/screen_nav.h"
+#include "screens/screen_map.h"
 #include "screens/screen_media.h"
 #include "screens/screen_info.h"
 
@@ -41,8 +42,8 @@
 #define SHUTDOWN_HOLD_MS   4000UL                   // 4.0s hold on display to shut down
 #define HOLD_INDICATOR_MS  1000UL                   // Show countdown ring after 1.0s
 #define SLEEP_TIMEOUT_MS   (10UL * 60UL * 1000UL)   // 10 min without BLE/motion/touch -> power off
-#define NAV_END_SHOW_MS    20000UL                  // Return to Waiting for Google Maps after 20 s
-#define ARRIVED_TIMEOUT_MS 20000UL                  // Auto-return to Waiting for Google Maps 20 s after Arrived
+#define NAV_END_SHOW_MS    10000UL                  // Return to Waiting screen after 10 s
+#define ARRIVED_TIMEOUT_MS 10000UL                  // Auto-return to Waiting screen 10 s after Arrived
 
 enum TouchEvent : uint8_t {
   TE_NONE = 0,
@@ -92,6 +93,30 @@ static int                   calculatePowerTier();
 static bool                  g_nvsDirty       = false;
 static uint32_t              g_nvsSaveAtMs    = 0;
 
+// ===================== Auto-Dimming Inactivity System =====================
+static uint32_t s_lastScreenUpdateMs = 0;
+static bool     s_isScreenDimmed     = false;
+static const uint8_t SCREEN_DIM_BRIGHTNESS = 25;
+
+static void reportScreenActivity() {
+  s_lastScreenUpdateMs = millis();
+  if (s_isScreenDimmed) {
+    s_isScreenDimmed = false;
+    if (g_panel && g_backlight) {
+      uint8_t target = g_config.brightness > 0 ? (uint8_t)g_config.brightness : 200;
+      g_panel->setBrightness(target);
+      Serial.printf("[PWR] Screen activity -> restored brightness to %d\n", target);
+    }
+  }
+}
+
+static inline bool isNavActive() {
+  return (g_maneuver.length() > 0 &&
+          g_maneuver != "clear" &&
+          g_maneuver != "end" &&
+          !g_navEnded);
+}
+
 static void dismissNavToHome(const char *reason) {
   g_maneuver         = "";
   g_distance         = "";
@@ -127,6 +152,14 @@ void redraw() {
     return;
   }
 
+  if (g_screen == SCR_MAP) {
+    screen_map_draw();
+    g_dirtyAll = g_dirtyIcon = g_dirtyDist = g_dirtyStreet = g_dirtyMedia = false;
+    g_navShown = true;
+    flushDisplay();
+    return;
+  }
+
   g_dirtyMedia = false;
   screen_nav_draw();
   g_dirtyAll = g_dirtyIcon = g_dirtyDist = g_dirtyStreet = false;
@@ -142,19 +175,6 @@ void sendMediaCommand(char cmd) {
 }
 
 // ===================== Navigation Payload Parsing =====================
-static int parseDistanceMeters(const String &d) {
-  if (d.length() == 0) return -1;
-  String low = d;
-  low.toLowerCase();
-  low.replace(",", ".");
-  float val = low.toFloat();
-  if (val <= 0.0f && low[0] != '0') return -1;
-  if (low.indexOf("km") >= 0) return (int)(val * 1000.0f);
-  if (low.indexOf("mi") >= 0) return (int)(val * 1609.34f);
-  if (low.indexOf("ft") >= 0) return (int)(val * 0.3048f);
-  if (low.indexOf("yd") >= 0) return (int)(val * 0.9144f);
-  return (int)val;
-}
 
 static String inferManeuverFromText(const String &text) {
   String t = text;
@@ -207,7 +227,31 @@ static String inferManeuverFromText(const String &text) {
 static volatile bool g_cfgDirty = false;
 
 void applyPayload(const String &rawPayload) {
+  reportScreenActivity();
   String payload = rawPayload;
+
+  if (payload.startsWith("vec|")) {
+    setRoadVectors(payload);
+    g_dirtyAll = true;
+    return;
+  }
+
+  // Handle weather packets from Android app: wth|<condition>|<temperature>
+  if (payload.startsWith("wth|")) {
+    int p1 = payload.indexOf('|');
+    int p2 = (p1 >= 0) ? payload.indexOf('|', p1 + 1) : -1;
+    if (p1 >= 0) {
+      g_weatherCond = (p2 >= 0) ? payload.substring(p1 + 1, p2) : payload.substring(p1 + 1);
+      g_weatherCond.trim();
+      if (p2 >= 0) {
+        g_weatherTemp = payload.substring(p2 + 1);
+        g_weatherTemp.trim();
+      }
+    }
+    g_dirtyAll = true;
+    Serial.printf("[WTH] Received weather: cond='%s', temp='%s'\n", g_weatherCond.c_str(), g_weatherTemp.c_str());
+    return;
+  }
 
   // Handle live display & power settings from Android app:
   // cfg|b=<5..255>|a=<hexRGB565>|d=<hexRGB565>|c=<80|160|240>|p=<0|1>
@@ -296,6 +340,19 @@ void applyPayload(const String &rawPayload) {
     const uint8_t idx = s_testIdx;
     s_testIdx = (s_testIdx + 1) % 11;
 
+    static const char *const kWeatherCond[] = {
+      "sun",     "sun",     "pcloudy", "cloudy",
+      "rain",    "thunder", "pcloudy", "sun",
+      "cloudy",  "rain",    "sun"
+    };
+    static const char *const kWeatherTemp[] = {
+      "30°",     "29°",     "28°",     "26°",
+      "24°",     "23°",     "27°",     "31°",
+      "25°",     "24°",     "28°"
+    };
+    g_weatherCond = kWeatherCond[idx];
+    g_weatherTemp = kWeatherTemp[idx];
+
     g_sub50Active   = false;
     g_sub50Done     = false;
     g_sub50Hold10At = 0;
@@ -309,6 +366,8 @@ void applyPayload(const String &rawPayload) {
   int p1 = payload.indexOf('|');
   int p2 = (p1 >= 0) ? payload.indexOf('|', p1 + 1) : -1;
   int p3 = (p2 >= 0) ? payload.indexOf('|', p2 + 1) : -1;
+  int p4 = (p3 >= 0) ? payload.indexOf('|', p3 + 1) : -1;
+  int p5 = (p4 >= 0) ? payload.indexOf('|', p4 + 1) : -1;
 
   String m, d, s;
   float explicitPct = -1.0f;
@@ -317,11 +376,19 @@ void applyPayload(const String &rawPayload) {
     d = (p2 >= 0) ? payload.substring(p1 + 1, p2) : payload.substring(p1 + 1);
     s = (p2 >= 0) ? ((p3 >= 0) ? payload.substring(p2 + 1, p3) : payload.substring(p2 + 1)) : "";
     if (p3 >= 0) {
-      String pStr = payload.substring(p3 + 1);
+      String pStr = (p4 >= 0) ? payload.substring(p3 + 1, p4) : payload.substring(p3 + 1);
       pStr.trim();
       if (pStr.length() > 0) {
         explicitPct = constrain(pStr.toFloat() / 100.0f, 0.0f, 1.0f);
       }
+    }
+    if (p4 >= 0) {
+      g_navEta = (p5 >= 0) ? payload.substring(p4 + 1, p5) : payload.substring(p4 + 1);
+      g_navEta.trim();
+    }
+    if (p5 >= 0) {
+      g_navTotalDist = payload.substring(p5 + 1);
+      g_navTotalDist.trim();
     }
   }
   m.trim(); d.trim(); s.trim();
@@ -466,6 +533,12 @@ void applyPayload(const String &rawPayload) {
   g_maneuver = m; g_distance = d; g_street = s;
 
   if (wasNav != isNav) g_dirtyAll = true;
+  if (!wasNav && isNav) {
+    g_screen   = SCR_MAP;
+    g_dirtyAll = true;
+    reportScreenActivity();
+    Serial.println("[NAV] Route started -> Default screen set to 3D Mini-Map (SCR_MAP)");
+  }
   if (!isNav) {
     g_iconValid      = false;
     g_prevDistMeters = -1;
@@ -474,6 +547,8 @@ void applyPayload(const String &rawPayload) {
     g_sub50Hold10At  = 0;
     g_navProgress    = 0.0f;
     g_maxLegMeters   = -1;
+    g_navEta         = "";
+    g_navTotalDist   = "";
   }
 
   Serial.printf("[NAV] raw='%s' -> m='%s' d='%s' (%.0f%%) s='%s'\n",
@@ -486,6 +561,7 @@ class ServerCallbacks : public NimBLEServerCallbacks {
   void onConnect(NimBLEServer *s, NimBLEConnInfo &info) override {
     g_connected = true;
     g_dirtyAll  = true;
+    reportScreenActivity();
     Serial.println("[BLE] client connected");
   }
   void onDisconnect(NimBLEServer *s, NimBLEConnInfo &info, int reason) override {
@@ -496,6 +572,7 @@ class ServerCallbacks : public NimBLEServerCallbacks {
     g_iconValid      = false;
     g_prevDistMeters = -1;
     g_sub50Active    = false;
+    reportScreenActivity();
     Serial.println("[BLE] client disconnected -> restarting advertising");
     NimBLEDevice::startAdvertising();
   }
@@ -509,6 +586,7 @@ class NavCharCallbacks : public NimBLECharacteristicCallbacks {
 
 class IconCharCallbacks : public NimBLECharacteristicCallbacks {
   void onWrite(NimBLECharacteristic *c, NimBLEConnInfo &info) override {
+    reportScreenActivity();
     NimBLEAttValue v = c->getValue();
     if (v.size() >= 3 && v[0] == 'I' && v[1] == 0 && v[2] == 0) {
       g_iconValid = false;
@@ -594,6 +672,7 @@ class IconCharCallbacks : public NimBLECharacteristicCallbacks {
 
 class MediaCharCallbacks : public NimBLECharacteristicCallbacks {
   void onWrite(NimBLECharacteristic *c, NimBLEConnInfo &info) override {
+    reportScreenActivity();
     String v = String(c->getValue().c_str());
     int p1 = v.indexOf('|');
     int p2 = (p1 >= 0) ? v.indexOf('|', p1 + 1) : -1;
@@ -645,7 +724,7 @@ static void drawShutdownHoldRing(float progress, uint32_t secRemaining) {
   // Background ring track (360 degrees)
   gfx->fillArc(CX, CY, 86, 78, 0.0f, 360.0f, 0x2104);
 
-  // Active progress arc (fills clockwise from 12 o'clock / 270°)
+  // Active progress arc (fills clockwise from 12 o'clock / 270 deg)
   progress = constrain(progress, 0.0f, 1.0f);
   if (progress > 0.005f) {
     if (progress >= 0.995f) {
@@ -692,6 +771,7 @@ static TouchEvent touchPoll() {
     pressStart = millis();
     longFired  = false;
     s_holdRingActive = false;
+    reportScreenActivity();
   } else if (now) {
     lastX = x;
     lastY = y;
@@ -830,7 +910,9 @@ static void setBacklight(bool on) {
   if (g_panel) {
     if (on) {
       g_panel->displayOn();
-      g_panel->setBrightness(g_config.brightness > 0 ? (uint8_t)g_config.brightness : 200);
+      uint8_t target = s_isScreenDimmed ? min((uint8_t)SCREEN_DIM_BRIGHTNESS, (uint8_t)(g_config.brightness > 0 ? g_config.brightness : 200))
+                                        : (g_config.brightness > 0 ? (uint8_t)g_config.brightness : 200);
+      g_panel->setBrightness(target);
     } else {
       g_panel->setBrightness(0);
       g_panel->displayOff();
@@ -925,19 +1007,33 @@ static void executeDeviceShutdown(const char *reason) {
 
   if (g_pmuOk) {
     power.clearIrqStatus();
-    // On battery: cut PMU power rails completely
-    if (!power.isVbusIn()) {
-      Serial.println("[PWR] Battery power -> full PMU shutdown");
-      power.shutdown();
-      delay(500);
-    } else {
-      Serial.println("[PWR] USB connected -> deep sleep standby (BOOT button wakes)");
-    }
+    Serial.println("[PWR] Executing PMU shutdown");
+    power.shutdown();
+    delay(300);
   }
 
-  // Deep sleep fallback / USB connected mode (woken by BOOT button GPIO 0)
-  esp_sleep_enable_ext0_wakeup((gpio_num_t)0, 0);
-  esp_deep_sleep_start();
+  // Standby mode (when USB is plugged in and PMU rails remain powered):
+  // Configure wakeups on BOTH GPIO 38 (AXP2101 IRQ from physical PWR button)
+  // and GPIO 0 (BOOT button).
+  gpio_config_t io_conf = {};
+  io_conf.pin_bit_mask = (1ULL << 38) | (1ULL << 0);
+  io_conf.mode = GPIO_MODE_INPUT;
+  io_conf.pull_up_en = GPIO_PULLUP_ENABLE;
+  io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
+  io_conf.intr_type = GPIO_INTR_LOW_LEVEL;
+  gpio_config(&io_conf);
+
+  gpio_wakeup_enable(GPIO_NUM_38, GPIO_INTR_LOW_LEVEL);
+  gpio_wakeup_enable(GPIO_NUM_0,  GPIO_INTR_LOW_LEVEL);
+  esp_sleep_enable_gpio_wakeup();
+
+  Serial.println("[PWR] Entering light sleep standby (woken by PWR or BOOT button)...");
+  esp_light_sleep_start();
+
+  // Woken by button press!
+  Serial.println("[PWR] Woken up by button press! Rebooting device...");
+  delay(100);
+  esp_restart();
 }
 
 static void goToSleep() {
@@ -1102,10 +1198,11 @@ void setup() {
   while (!Serial && (millis() - t0 < 1500)) {
     delay(10);
   }
-  Serial.println("\n[BOOT] Drive Assistant — Waveshare ESP32-S3-Touch-AMOLED-1.8");
+  Serial.println("\n[BOOT] Drive Assistant - Waveshare ESP32-S3-Touch-AMOLED-1.8");
 
   pinMode(0, INPUT_PULLUP);      // BOOT button
   pinMode(TP_INT, INPUT_PULLUP); // Touch interrupt
+  pinMode(38, INPUT_PULLUP);     // AXP2101 PMU IRQ line (PWR button)
 
   Wire.begin(IIC_SDA, IIC_SCL);
 
@@ -1165,6 +1262,8 @@ void setup() {
   gfx->fillScreen(COL_BG);
   redraw();
   setBacklight(true);
+  s_lastScreenUpdateMs = millis();
+  s_isScreenDimmed     = false;
 
   // 4. Initialize Touch, 6-Axis IMU & Battery
   g_touch = make_touch();
@@ -1229,6 +1328,7 @@ void loop() {
       if (common_consume_pwr_short()) {
         common_activity();
         g_lastActivity = nowMs;
+        reportScreenActivity();
         setBacklight(!g_backlight);
         if (g_backlight) g_dirtyAll = true;
       }
@@ -1248,6 +1348,7 @@ void loop() {
   if (!bootNow && s_bootWas) {
     if (g_pmuOk) common_activity();
     g_lastActivity = nowMs;
+    reportScreenActivity();
     if (!g_backlight) {
       setBacklight(true);
       g_dirtyAll = true;
@@ -1268,6 +1369,7 @@ void loop() {
   }
   if (ev != TE_NONE) {
     g_lastActivity = nowMs;
+    reportScreenActivity();
     if (g_pmuOk) common_activity();
   }
 
@@ -1280,6 +1382,14 @@ void loop() {
         dismissNavToHome("display tap");
       } else if (g_screen == SCR_MEDIA) {
         screen_media_tap(g_tapX, g_tapY);
+      } else if (g_screen == SCR_MAIN) {
+        g_screen   = SCR_MAP;
+        g_dirtyAll = true;
+        Serial.println("[UI] Tap -> 3D Mini Map (Screen 1)");
+      } else if (g_screen == SCR_MAP) {
+        g_screen   = SCR_MAIN;
+        g_dirtyAll = true;
+        Serial.println("[UI] Tap -> Main HUD (Screen 0)");
       } else if (g_screen != SCR_MAIN) {
         g_screen   = SCR_MAIN;
         g_dirtyAll = true;
@@ -1315,11 +1425,12 @@ void loop() {
     goToSleep();
   }
 
-  // Auto-return to "Waiting for Google Maps" home screen 20 seconds after destination arrival
-  if ((g_maneuver == "arrive" && g_distance == "Arrived") || g_navEnded) {
+  // Auto-return to Waiting home screen 10 seconds after destination arrival
+  if (g_maneuver == "arrive" || g_distance == "Arrived" || g_navEnded) {
+    if (g_arrivedAt == 0) g_arrivedAt = nowMs;
     uint32_t startMs = (g_arrivedAt > 0) ? g_arrivedAt : g_navEndedAt;
     if (startMs > 0 && nowMs - startMs >= ARRIVED_TIMEOUT_MS) {
-      dismissNavToHome("20s arrival timeout");
+      dismissNavToHome("10s arrival timeout");
     }
   }
 
@@ -1330,10 +1441,18 @@ void loop() {
     if (batteryPoll() && g_screen == SCR_INFO) g_dirtyAll = true;
   }
 
+  // Track screen transitions to reset dimming activity timer
+  static uint8_t s_lastScreen = 255;
+  if (g_screen != s_lastScreen) {
+    s_lastScreen = g_screen;
+    reportScreenActivity();
+  }
+
   // Apply pending display & power config changes immediately on the UI loop thread,
   // and debounce NVS flash writes (1000 ms) so slider dragging never spams flash.
   if (g_cfgDirty) {
     g_cfgDirty = false;
+    reportScreenActivity();
     if (!g_backlight) setBacklight(true);
     if (g_panel) {
       g_panel->setBrightness((uint8_t)g_config.brightness);
@@ -1361,12 +1480,47 @@ void loop() {
     Serial.println("[CFG] Saved settings to NVS flash");
   }
 
+  // Auto-dimming on idle screens (>5s inactivity on Waiting screen or stopped/paused Music Player)
+  bool isWaitingScreen   = (g_screen == SCR_MAIN && !isNavActive());
+  bool isIdleMediaScreen = (g_screen == SCR_MEDIA && g_mediaState != 2);
+  bool canDim            = (isWaitingScreen || isIdleMediaScreen);
+
+  if (!canDim) {
+    if (s_isScreenDimmed) {
+      reportScreenActivity();
+    }
+  } else {
+    if (!s_isScreenDimmed && g_backlight && (nowMs - s_lastScreenUpdateMs >= 5000)) {
+      s_isScreenDimmed = true;
+      if (g_panel) {
+        uint8_t dimVal = min((uint8_t)SCREEN_DIM_BRIGHTNESS, (uint8_t)(g_config.brightness > 0 ? g_config.brightness : 200));
+        g_panel->setBrightness(dimVal);
+        Serial.printf("[PWR] Screen idle >5s -> dimmed to %d\n", dimVal);
+      }
+    }
+  }
+
+  // 24 FPS frame rate governor for SCR_MAP (41ms per frame = 24.4 FPS)
+  static uint32_t s_lastMapFrameMs = 0;
+  bool mapTick = false;
+  if (g_screen == SCR_MAP && g_backlight) {
+    uint32_t now = millis();
+    if (now - s_lastMapFrameMs >= 41) {
+      s_lastMapFrameMs = now;
+      mapTick = true;
+    }
+  }
+
   // Redraw changed regions when display is active
-  if (g_backlight &&
-      (g_dirtyAll || g_dirtyIcon || g_dirtyDist || g_dirtyStreet ||
-       (g_dirtyMedia && g_screen == SCR_MEDIA))) {
+  bool hasUpdate = (g_dirtyAll || g_dirtyIcon || g_dirtyDist || g_dirtyStreet ||
+                    (g_dirtyMedia && g_screen == SCR_MEDIA));
+  if (hasUpdate) {
+    reportScreenActivity();
+  }
+
+  if (g_backlight && (mapTick || hasUpdate)) {
     redraw();
   }
 
-  delay(g_pollHigh ? 10 : 20);
+  delay(g_screen == SCR_MAP ? 4 : (g_pollHigh ? 10 : 20));
 }

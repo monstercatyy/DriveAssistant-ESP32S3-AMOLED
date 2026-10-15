@@ -1,5 +1,5 @@
 /*
- * screen_media.h — Music Playback Control Screen Component (SCR_MEDIA)
+ * screen_media.h - Music Playback Control Screen Component (SCR_MEDIA)
  */
 
 #pragma once
